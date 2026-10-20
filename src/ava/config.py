@@ -1,11 +1,11 @@
 """Run configuration for AVA.
 
 Configuration is data, not code: a single run is described by a YAML file so
-that E-2 can change behaviour without editing Python. For E-1 the fields cover
-one input clip, one detector path and output locations. E-2-T1 adds rule
-profiles (line crossing, zone entry, dwell) with pre-run validation per ADR-4:
-normalized geometry, explicit clocks, bottom-center anchors, and class prompts
-kept separate from rules.
+behaviour can change without editing Python. The fields cover one input clip,
+one detector path and output locations, plus rule profiles (line crossing,
+zone entry, dwell) with pre-run validation per ADR-4: normalized geometry,
+explicit clocks, bottom-center anchors, and class prompts kept separate from
+rules.
 """
 
 from __future__ import annotations
@@ -229,7 +229,7 @@ class CameraConfig(BaseModel):
     """One camera's input and the rule profiles applied to it."""
 
     id: str
-    # Input clip for replay (E-2); live stream sources arrive in E-3.
+    # Input clip for replay; live stream sources are not supported yet.
     source: Path
     # Rule profile names that must resolve against `profiles` in RunConfig.
     profiles: list[str] = Field(default_factory=list)
@@ -255,20 +255,20 @@ class RunConfig(BaseModel):
     # Write an annotated MP4 alongside the JSONL.
     annotate: bool = True
 
-    # --- E-2-T1 rule configuration (ADR-4) ---
+    # Rule-driven camera configuration (ADR-4).
     cameras: list[CameraConfig] = Field(default_factory=list)
     profiles: list[RuleProfile] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _resolve_references(self) -> "RunConfig":
-        # E-1-style runs (single source + detector) remain valid.
+        # Simple runs (single source + detector) remain valid.
         if self.source is None and not self.cameras:
             raise ValueError(
-                "config must define either `source`+`detector` (E-1 style) "
-                "or at least one entry in `cameras` (E-2 style)"
+                "config must define either `source`+`detector` "
+                "or at least one entry in `cameras`"
             )
         if self.cameras and self.detector is None:
-            raise ValueError("E-2 camera runs require a `detector` section")
+            raise ValueError("camera runs require a `detector` section")
 
         profile_ids = {p.id for p in self.profiles}
         camera_ids = [c.id for c in self.cameras]

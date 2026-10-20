@@ -1,8 +1,8 @@
-# AVA E-1: single-camera detection in a GPU-enabled container.
+# AVA: single-camera detection in a GPU-enabled container.
 #
 # - Explicit GPU selection via NVIDIA Container Toolkit (GPU 0 by default).
 # - Footage mounted read-only; results and model caches persisted.
-# - No external services: E-1 needs no database/broker/storage connection.
+# - No external services: this PoC needs no database/broker/storage connection.
 #
 # Override the GPU with:  AVA_GPU=1 docker compose run ava ...
 name: ava
@@ -35,4 +35,4 @@ services:
       - ./results:/results
       # Sanitized run configs only; private docs are never mounted or built in.
       - ./configs:/configs:ro
-    # Do not expose any ports: E-1 is a local offline PoC.
+    # Do not expose any ports: this is a local offline PoC.

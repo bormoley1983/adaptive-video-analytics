@@ -1,8 +1,7 @@
-"""E-2-T2 rule engine fixtures (deterministic, no GPU).
+"""Rule engine fixtures (deterministic, no GPU).
 
-Covers the acceptance criteria: boundary jitter, sparse samples, re-entry,
-missing tracks and timestamp discontinuities, with explicit expected counts
-and times (ADR-4 semantics).
+Boundary jitter, sparse samples, re-entry, missing tracks and timestamp
+discontinuities, with explicit expected counts and times (ADR-4 semantics).
 """
 
 from __future__ import annotations

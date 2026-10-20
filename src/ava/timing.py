@@ -1,4 +1,4 @@
-"""CUDA-synchronized per-phase timing for E-1-T5 baseline measurement.
+"""CUDA-synchronized per-phase timing for baseline measurement.
 
 The runner decodes, infers, and writes outputs in a single loop. To report an
 honest baseline (decode vs analysis vs export, warm-up vs steady-state, p50/p95

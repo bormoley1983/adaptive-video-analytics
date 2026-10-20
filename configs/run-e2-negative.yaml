@@ -1,4 +1,4 @@
-# E-2-T4 negative test: zone in an empty area (top-left corner) should
+# Negative test: zone in an empty area (top-left corner) should
 # produce zero events. The crosswalk clip has no activity in that region.
 schema_version: "1"
 source: /videos/input.mp4

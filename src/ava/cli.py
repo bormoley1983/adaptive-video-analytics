@@ -1,6 +1,6 @@
 """AVA command-line entry point.
 
-E-1 exposes a single `ava run` command that takes a config file and an optional
+Exposes a single `ava run` command that takes a config file and an optional
 GPU override. This is the reproducible command recorded in the baseline report.
 """
 

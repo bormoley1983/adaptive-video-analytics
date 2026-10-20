@@ -1,4 +1,4 @@
-# E-2-T1 example: rule-driven run over the E-1 crosswalk clip.
+# Rule-driven run over the crosswalk clip.
 # Demonstrates line crossing, zone entry and dwell configured purely in YAML
 # (ADR-4). Class prompts stay in `detector`; rules only reference class names.
 schema_version: "1"

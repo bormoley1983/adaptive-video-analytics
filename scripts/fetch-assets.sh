@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download and verify the E-1 model assets (data only; no code changes).
+# Download and verify the model assets (data only; no code changes).
 # Links and SHA-256 values from docs/dev-plan/E-1-prerequisites.md.
 set -euo pipefail
 

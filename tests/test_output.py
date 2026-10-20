@@ -26,7 +26,7 @@ def test_jsonl_writes_one_line_per_frame(tmp_path: Path) -> None:
     path = tmp_path / "detections.jsonl"
     writer = JsonlWriter(path)
     writer.write(_sample_result())
-    # Empty-detection frame must also be written (E-1-T3 acceptance).
+    # Empty-detection frames must also be written.
     writer.write(FrameResult(1, 0.033, 1280, 720, []))
     writer.close()
 

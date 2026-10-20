@@ -1,7 +1,7 @@
 """Output writers: per-frame JSONL and annotated MP4.
 
 Both consume the same FrameResult stream so conventional and prompted runs
-produce comparable, inspectable artifacts (E-1-T3/T4).
+produce comparable, inspectable artifacts.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ class JsonlWriter:
     """Append one JSON object per frame to a JSONL file.
 
     Empty-detection frames are written too, so the record count matches the
-    source frame count and timestamps stay aligned (E-1-T3 acceptance).
+    source frame count and timestamps stay aligned.
     """
 
     def __init__(self, path: Path) -> None:

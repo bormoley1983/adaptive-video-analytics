@@ -1,4 +1,4 @@
-# AVA E-1 inference image.
+# AVA inference image.
 #
 # Base: NVIDIA CUDA runtime image so the container sees the host GPU via the
 # NVIDIA Container Toolkit. The Python version is chosen for compatibility with
@@ -23,8 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install the package and its locked dependencies. The git+CLIP dependency is
-# fetched at build time so inference never triggers a first-use pip install
-# (E-1 prerequisites: hidden first-run dependencies).
+# fetched at build time so inference never triggers a first-use pip install.
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3.12 -m venv /opt/venv \

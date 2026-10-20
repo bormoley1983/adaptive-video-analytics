@@ -1,4 +1,4 @@
-"""Tests for the E-2-T3 event/evidence contract (ADR-5)."""
+"""Tests for the versioned event/evidence contract (ADR-5)."""
 
 from __future__ import annotations
 

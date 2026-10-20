@@ -1,8 +1,8 @@
 """Video ingestion.
 
 Decodes an MP4 into timestamped BGR frames. Kept separate from inference so a
-faster decode path (e.g. NVDEC in E-3) can replace it without touching the
-detector or output writers.
+faster decode path (e.g. NVDEC) can replace it without touching the detector
+or output writers.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def iter_frames(source: Path):
     """Yield frames from a video file in decode order.
 
     Timestamps are derived from the frame index and the container FPS so they
-    can be matched back to the source timeline (E-1-T3 acceptance).
+    can be matched back to the source timeline.
     """
     import cv2  # deferred: heavy import
 

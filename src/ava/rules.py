@@ -1,4 +1,4 @@
-"""Rule engine for E-2 (ADR-4 semantics).
+"""Rule engine (ADR-4 semantics).
 
 Turns per-frame detections into line crossings, zone entries and dwell alerts.
 Semantics implemented here:
@@ -152,8 +152,8 @@ class _TrackState:
 
 
 # ---------------------------------------------------------------------------
-# Events (E-2-T3 will add the full versioned contract; this is the engine's
-# internal emission shape, already carrying the ADR-5 minimum fields)
+# Events (internal emission shape, already carrying the ADR-5 minimum fields;
+# the full versioned contract lives in ava.events)
 # ---------------------------------------------------------------------------
 
 

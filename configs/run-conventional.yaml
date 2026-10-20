@@ -1,4 +1,4 @@
-# E-1 conventional detection run (YOLO26n + ByteTrack).
+# Conventional detection run (YOLO26n + ByteTrack).
 # Paths are container-internal; Compose mounts the host dirs at these locations.
 source: /videos/input.mp4
 gpu: "0"

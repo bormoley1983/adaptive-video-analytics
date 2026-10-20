@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ava"
 version = "0.1.0"
-description = "Adaptive Video Analytics: single-camera detection PoC (E-1)"
+description = "Adaptive Video Analytics: single-camera detection PoC"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = { text = "Proprietary - internal PoC" }
 authors = [{ name = "AVA" }]
 
-# E-1 conventional + prompted detection slice.
+# Conventional + prompted detection dependencies.
 # Versions are pinned after the compatibility run (ADR-1 current-stable policy).
 dependencies = [
     # Core inference. Revalidate exact mutually-compatible stable set at build time.
@@ -19,7 +19,7 @@ dependencies = [
     "torch>=2.6,<3",
     "torchvision>=0.21,<1",
     "opencv-python-headless>=4.9",
-    # YOLOE text-prompting tokenizer dependency (ADR-3 / E-1 prerequisites).
+    # YOLOE text-prompting tokenizer dependency (ADR-3).
     "clip @ git+https://github.com/ultralytics/CLIP.git@main",
     # Configuration and validation.
     "pydantic>=2.7",

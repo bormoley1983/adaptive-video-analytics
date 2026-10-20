@@ -1,4 +1,4 @@
-# E-1 text-prompted detection run (YOLOE-26 small + MobileCLIP text encoder).
+# Text-prompted detection run (YOLOE-26 small + MobileCLIP text encoder).
 # Classes are configured before the run (ADR-3); absent classes are recorded,
 # not claimed as detected.
 source: /videos/input.mp4

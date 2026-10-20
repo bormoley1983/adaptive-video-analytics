@@ -1,6 +1,6 @@
 """Detector adapters.
 
-A narrow contract: given a BGR frame, return detection metadata. The two E-1
+A narrow contract: given a BGR frame, return detection metadata. The two
 paths (conventional YOLO26 and text-prompted YOLOE) share this shape so the
 runner and output writers do not care which model produced the boxes.
 """
@@ -124,7 +124,7 @@ class PromptedDetector(Detector):
     """YOLOE-26 text-prompted detection.
 
     Classes are configured before the run (ADR-3); runtime prompt changes are
-    not part of E-1.
+    not supported.
     """
 
     def __init__(self, model_path: Path, device: str | None = "0",
@@ -145,8 +145,8 @@ class PromptedDetector(Detector):
 
         self._model = YOLO(str(self.model_path))
         self._model.to(self.device)
-        # Point the text encoder at the pre-placed asset (E-1-T4: no first-use
-        # downloads). Ultralytics' build_text_model hard-codes the mobileclip2
+        # Point the text encoder at the pre-placed asset so inference never
+        # triggers a first-use download. Ultralytics' build_text_model hard-codes the mobileclip2
         # weight filename, so the yaml/attribute override is not honoured; the
         # reliable lever is SETTINGS["weights_dir"], which attempt_download_asset
         # checks before downloading. The pre-placed file must live there.

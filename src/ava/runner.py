@@ -1,8 +1,9 @@
 """Run orchestration.
 
-Wires ingest -> detector -> output writers for a single configured run. E-1
-runs one clip through one detector path sequentially; E-2 adds rule profiles
-per camera with versioned event/evidence output (ADR-4/ADR-5).
+Wires ingest -> detector -> output writers for a single configured run. A
+simple run processes one clip through one detector path sequentially; camera
+runs apply rule profiles per camera with versioned event/evidence output
+(ADR-4/ADR-5).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ WARMUP_FRAMES = 50
 
 @dataclass
 class RunSummary:
-    """Measured facts about a completed run (feeds E-1-T5 baseline)."""
+    """Measured facts about a completed run (feeds the baseline report)."""
 
     source: str
     detector_kind: str
@@ -37,7 +38,7 @@ class RunSummary:
     wall_seconds: float = 0.0
     load_seconds: float = 0.0
     output_paths: list[str] = field(default_factory=list)
-    # E-1-T5 phase breakdown (seconds), CUDA-synchronized on GPU runs.
+    # Phase breakdown (seconds), CUDA-synchronized on GPU runs.
     decode_seconds: float = 0.0
     inference_seconds: float = 0.0
     output_seconds: float = 0.0
@@ -47,7 +48,7 @@ class RunSummary:
     infer_mean_s: float = 0.0
     # Peak CUDA memory allocated by the process during the run (bytes).
     peak_gpu_mem_bytes: int = 0
-    # E-2: rule-triggered events emitted during the run.
+    # Rule-triggered events emitted during the run.
     events: int = 0
 
     def to_dict(self) -> dict:
@@ -102,8 +103,8 @@ def run(config: RunConfig) -> RunSummary:
     """Execute one configured detection run end to end."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # E-2 style: cameras with rule profiles. Each camera is replayed through
-    # the shared detector; rules produce versioned events + evidence (ADR-5).
+    # Camera runs: each camera is replayed through the shared detector;
+    # rules produce versioned events + evidence (ADR-5).
     if config.cameras:
         return _run_cameras(config)
 
@@ -194,7 +195,7 @@ def run(config: RunConfig) -> RunSummary:
 
 
 def _run_cameras(config: RunConfig) -> RunSummary:
-    """E-2 run: replay each camera clip through the detector and rule engine.
+    """Camera run: replay each camera clip through the detector and rule engine.
 
     Produces per-camera detection JSONL, a shared versioned events.jsonl
     (ADR-5), and evidence files for rules that request them.

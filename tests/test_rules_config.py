@@ -1,7 +1,7 @@
-"""E-2-T1 rule-profile configuration checks (no GPU, no model download).
+"""Rule-profile configuration checks (no GPU, no model download).
 
-Covers the acceptance criteria: valid profiles load; invalid examples fail
-with actionable errors before a run starts (ADR-4).
+Valid profiles load; invalid examples fail with actionable errors before a
+run starts (ADR-4).
 """
 
 from __future__ import annotations

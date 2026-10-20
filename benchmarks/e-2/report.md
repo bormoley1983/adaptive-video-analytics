@@ -113,7 +113,7 @@ state is small relative to model weights.
 1. **No ground-truth annotation.** This baseline reports system behaviour
    (event counts, track stability), not detection accuracy against labelled data.
    Precision/recall/false-alert-per-camera-hour require annotated examples with
-   matching tolerance (E-2-T5 acceptance criterion). That work is deferred to
+   matching tolerance. That work is deferred to
    B-003 where owner-defined quality thresholds are agreed.
 
 2. **Single clip.** One 29.5 s crosswalk clip does not represent production

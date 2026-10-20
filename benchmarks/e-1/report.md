@@ -11,7 +11,7 @@ PoC, **not** a live-event-latency or detection-quality guarantee (see E-1 scope)
 | Host | `ai-host1`, Ubuntu 26.04.1 LTS (resolute), kernel 7.0.0-38-generic |
 | GPU (selected) | RTX 3090, UUID `GPU-facd1ddc-c4ab-7ac9-0000-ead909e0ec42` (GPU 0) |
 | GPU (preserved) | RTX 3090, UUID `GPU-5e0a88d2-…791` (GPU 1, llama-server — untouched) |
-| Image | `ava/e1:local`, digest `sha256:ce490d58…b986d4e8` (rebuilt for T5 timing instrumentation) |
+| Image | `ava/e1:local`, digest `sha256:ce490d58…b986d4e8` (rebuilt for per-phase timing instrumentation) |
 | Base image | `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04` |
 | Container Python | 3.12.3 |
 | torch | 2.14.1+cu130 (`torch.version.cuda` = 13.0, CUDA available) |
@@ -116,7 +116,7 @@ backpack 13, chair 3, oven 3, skateboard 2.
 
 Class distribution: person 11814, motorcycle 1815, car 1302, **bag 1250**,
 backpack 9, fire extinguisher 2. Absent/low classes are recorded without claiming
-detection quality for them (E-1-T4 acceptance).
+detection quality for them.
 
 ## Interpretation
 
@@ -127,8 +127,8 @@ detection quality for them (E-1-T4 acceptance).
   step with the loop, so decode time here reflects only the residual after
   inference and output are subtracted from wall-clock.
 - **Output overhead is significant** (~9 s per run for JSONL + annotated MP4
-  encode). This is rendering/export cost, separate from analysis. A future epic
-  can decouple or parallelize export without changing the detector contract.
+  encode). This is rendering/export cost, separate from analysis. Export can be
+  decoupled or parallelized later without changing the detector contract.
 - **Prompted inference is ~30% slower per frame than conventional** (p50 5.67 ms
   vs 4.33 ms) and uses ~2.6× the peak GPU memory, consistent with YOLOE's larger
   seg head plus the fused text-prompt embeddings.
@@ -139,11 +139,11 @@ detection quality for them (E-1-T4 acceptance).
 ## Speculative capacity estimate (NOT a measured result)
 
 > **Status: intermediate, speculative.** This section extrapolates from the single
-> E-1 data point to answer "how many streams can one GPU process?" It is an
-> **estimate, not a capacity certification.** Per ADR-6, E-1 offline throughput is
+> baseline data point to answer "how many streams can one GPU process?" It is an
+> **estimate, not a capacity certification.** Per ADR-6, offline throughput is
 > not live event latency and "aggregate FPS alone cannot pass." No concurrency,
 > queueing, or live pacing was tested. Treat every number below as a projection to
-> be validated by the E-3/E-4 concurrent-load benchmark, not a measured capacity.
+> be validated by a concurrent-load benchmark, not a measured capacity.
 
 **What the data does support — inference-only frames/second.** Isolating the
 detection stage (inference phase ÷ frames) gives the GPU's raw detection rate:
@@ -154,13 +154,13 @@ detection stage (inference phase ÷ frames) gives the GPU's raw detection rate:
 | Prompted (YOLOE-26s + MobileCLIP2) | 10.45 s / 1768 | ~169 fps | ~6–7 streams (same caveat) |
 
 **Why this overstates end-to-end capacity:**
-- **Output is the largest E-1 phase** (~9 s/run for JSONL + annotated MP4). A live
+- **Output is the largest phase** (~9 s/run for JSONL + annotated MP4). A live
   multi-stream setup would not render an MP4 per stream, so this cost largely
   disappears — but it means the ~204 fps figure overstates what the *current*
   pipeline sustains end-to-end (~91 fps wall conventional).
 - **Decode was measured as a residual** (wall − inference − output), not isolated.
   N concurrent streams need N decoders (CPU/OpenCV here, or NVDEC in the target
-  stack); E-1 has no data on whether decode scales.
+  stack); there is no data yet on whether decode scales.
 - **No concurrency was tested.** Sequential single-stream jobs ≠ simultaneous
   streams; GPU utilization, batching, memory pressure, and queueing all change.
 
@@ -191,13 +191,13 @@ roughly **3–4× the inference FPS** on the 6000 Pro — i.e., where the 3090 d
 helps for bigger models or higher-res inputs.
 
 **Caveats:** real gains depend on compute- vs memory/decode-bound behavior; a
-TensorRT export (E-3/E-4 target) typically adds another 1.5–2× over eager PyTorch
-for *both* GPUs and may shift the ratio; no 6000 Pro was benchmarked here.
+TensorRT export typically adds another 1.5–2× over eager PyTorch for *both* GPUs
+and may shift the ratio; no 6000 Pro was benchmarked here.
 
 ### What would make this a real answer
 
-Per ADR-6's protocol (E-3/E-4 scope): fix the workload (input/analysis FPS,
-detector path, live pacing); warm up; run **increasing concurrent camera counts**
+Per ADR-6's protocol: fix the workload (input/analysis FPS, detector path,
+live pacing); warm up; run **increasing concurrent camera counts**
 under identical settings; record per-camera FPS, event-latency p50/p95, queue
 depth/oldest age, drops, and GPU/CPU/VRAM utilization at each point. The capacity
 is the highest point holding ≥4 analyzed fps/camera, p95 < 3 s, no sustained queue
@@ -217,18 +217,18 @@ Detection counts are deterministic for a given build; wall-clock varies by <1 s
 between runs (GPU scheduling / thermal). Output artifacts (`detections.jsonl`,
 `annotated.mp4`) are regenerated identically in structure (1768 JSONL lines each).
 
-## Decisions and findings recorded during T5
+## Decisions and findings
 
 - **CUDA-synchronized timing added** (`src/ava/timing.py`): a `PhaseTimer`
   synchronizes the CUDA device at each phase boundary on GPU runs so inference
   cost is not attributed to the following decode. CPU smoke runs skip the sync.
   Steady-state percentiles exclude the first 50 warm-up frames.
-- **Text-encoder no-download fix verified** (carried from T4): ultralytics
+- **Text-encoder no-download fix verified**: ultralytics
   `build_text_model` hard-codes `weight="mobileclip2_b.ts"` for the mobileclip2
   base, so yaml/attribute path overrides are ignored. The reliable lever is
   `SETTINGS["weights_dir"]`; `PromptedDetector.load()` copies the pre-placed
-  asset into `WEIGHTS_DIR` and sets `SETTINGS["weights_dir"]`. Both T5 runs show
-  **0 download lines**.
+  asset into `WEIGHTS_DIR` and sets `SETTINGS["weights_dir"]`. Both timed runs
+  show **0 download lines**.
 - **YOLOE outputs a class beyond the configured prompts.** After
   `set_classes([person, backpack, car, motorcycle, fire extinguisher])` the model's
   `names` dict holds exactly those 5 entries (IDs 0–4), yet on some frames YOLOE
@@ -236,7 +236,7 @@ between runs (GPU scheduling / thermal). Output artifacts (`detections.jsonl`,
   This is YOLOE-26s-seg's segmentation head producing an additional class beyond
   the text prompts. It is recorded here as observed behavior; it does not affect
   the conventional path and is not a quality claim for the prompted path.
-- **Prompted detection count differs from the earlier T4 run** (14949 → 16192).
+- **Prompted detection count differs from the earlier prompted run** (14949 → 16192).
   The delta is the class-5 `bag` output (1250) plus a small backpack shift
   (16 → 9); person/motorcycle/car counts are unchanged. The current build is
   reproducible at 16192 across consecutive runs, so that is the recorded baseline.
@@ -245,7 +245,7 @@ between runs (GPU scheduling / thermal). Output artifacts (`detections.jsonl`,
 
 - No access blockers. All assets were pre-placed and SHA-256 verified; both runs
   completed with exit code 0 and no first-use downloads.
-- One transient issue during T5 development: a bare `docker run` (outside Compose)
+- One transient issue during timing development: a bare `docker run` (outside Compose)
   re-downloaded `yoloe-26s-seg.pt` and `mobileclip2_b.ts` into the container CWD
   because that path does not go through AVA's `PromptedDetector.load()` asset
   logic. The SHA-256 of `models/yoloe-26s-seg.pt` was re-verified unchanged

@@ -9,7 +9,7 @@ cd /home/admaccess/adaptive-video-analytics
 Everything below is copy-paste. Each section is independent — you can run just the
 parts you want. Expected outputs are given so you can confirm a clean reproduction.
 
-> **Scope note:** this reproduces the E-1 functional PoC baseline (one clip, two
+> **Scope note:** this reproduces the functional PoC baseline (one clip, two
 > detector paths, offline batch). It is not a live-latency or detection-quality
 > test. See `report.md` for the measured numbers and interpretation.
 

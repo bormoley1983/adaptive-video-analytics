@@ -5,8 +5,8 @@ Single-camera video detection proof of concept. Runs a **conventional** detector
 sequentially on one MP4, producing an annotated video and per-frame JSONL
 detection records with honest speed measurements.
 
-This is the E-1 slice: no RTSP, DeepStream, services, databases or dashboards.
-See `docs/` (private, not in Git) for planning, ADRs and progress.
+Scope: single-camera offline PoC — no RTSP, DeepStream, services, databases
+or dashboards. See `docs/` (private, not in Git) for planning, ADRs and progress.
 
 ## Layout
 
