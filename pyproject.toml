@@ -29,6 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=6.0",
     "ruff>=0.4",
 ]
 
@@ -45,3 +46,18 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = ["--strict-markers"]
+markers = [
+    "integration: verifies collaboration between AVA components without a live deployment",
+    "e2e: verifies a complete user-visible workflow with production-like boundaries",
+    "infra: verifies container, GPU, service, or deployment infrastructure",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["ava"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 100

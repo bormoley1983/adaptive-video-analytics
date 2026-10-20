@@ -40,12 +40,20 @@ docker compose run --rm ava run --config /configs/run-prompted.yaml
 Outputs land under `results/<path>/`: `detections.jsonl` and `annotated.mp4`.
 Override the GPU with `AVA_GPU=<index-or-uuid> docker compose run ...`.
 
-## Tests (no GPU)
+## Development checks
 
 ```bash
-python -m pytest tests/ -q
-ruff check src tests
+python3 -m pip install -e '.[dev]'
+make test-unit
+make test-integration
+make test-e2e
+make test-infra
+make test-coverage
+make lint
 ```
 
-These validate config parsing and the JSONL contract only; they do not certify
-GPU inference.
+The suites are intentionally separate because they prove different boundaries.
+Unit tests require no GPU. End-to-end and infrastructure tests may require the
+declared media, models, container runtime, GPU or services. An empty selected
+suite exits as not collected rather than being treated as a pass. See
+`docs/tests_rules.md` when the private documentation tree is available.

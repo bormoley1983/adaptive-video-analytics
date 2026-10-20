@@ -1,0 +1,70 @@
+# E-2-T1 example: rule-driven run over the E-1 crosswalk clip.
+# Demonstrates line crossing, zone entry and dwell configured purely in YAML
+# (ADR-4). Class prompts stay in `detector`; rules only reference class names.
+schema_version: "1"
+source: /videos/input.mp4
+gpu: "0"
+output_dir: /results/e2-rules
+jsonl: true
+annotate: true
+
+detector:
+  kind: conventional
+  model: /models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5
+
+cameras:
+  - id: cam-01
+    source: /videos/input.mp4
+    profiles: [crosswalk]
+
+profiles:
+  - id: crosswalk
+    description: Crosswalk line crossing + restricted-zone entry + dwell demo
+    rules:
+      # People crossing the crosswalk line, either direction.
+      - id: crosswalk-crossing
+        type: line_crossing
+        line:
+          start: [0.0, 0.62]
+          end: [1.0, 0.62]
+        direction: both
+        classes:
+          include: [person]
+        deadband: 0.01
+        debounce_frames: 2
+        evidence:
+          snapshot: true
+
+      # Entry into a restricted zone (normalized polygon).
+      - id: restricted-zone
+        type: zone_entry
+        zone:
+          points:
+            - [0.55, 0.30]
+            - [0.95, 0.30]
+            - [0.95, 0.75]
+            - [0.55, 0.75]
+        classes:
+          include: [person, car]
+        debounce_frames: 3
+        evidence:
+          snapshot: true
+
+      # Dwell in the zone for more than 10 source seconds.
+      - id: zone-dwell
+        type: dwell
+        zone:
+          points:
+            - [0.55, 0.30]
+            - [0.95, 0.30]
+            - [0.95, 0.75]
+            - [0.55, 0.75]
+        classes:
+          include: [person]
+        dwell_seconds: 10.0
+        missing_track_grace_s: 2.0
+        evidence:
+          clip: true
+          clip_seconds: 3.0

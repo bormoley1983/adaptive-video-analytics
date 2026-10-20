@@ -83,11 +83,15 @@ class ConventionalDetector(Detector):
 
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
         assert self._model is not None, "call load() first"
-        results = self._model.predict(
+        # Use track() (not predict()) so ultralytics registers the ByteTrack
+        # callbacks. persist=True keeps one tracker instance across frames so
+        # frame_id increments and track identity is maintained.
+        results = self._model.track(
             bgr_frame,
             conf=self.confidence,
             iou=self.iou,
             tracker="bytetrack.yaml",
+            persist=True,
             verbose=False,
         )
         detections: list[Detection] = []

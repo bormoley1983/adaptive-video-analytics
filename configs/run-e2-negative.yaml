@@ -1,0 +1,48 @@
+# E-2-T4 negative test: zone in an empty area (top-left corner) should
+# produce zero events. The crosswalk clip has no activity in that region.
+schema_version: "1"
+source: /videos/input.mp4
+gpu: "0"
+output_dir: /results/e2-negative
+jsonl: true
+annotate: false
+
+detector:
+  kind: conventional
+  model: /models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5
+
+cameras:
+  - id: cam-01
+    source: /videos/input.mp4
+    profiles: [empty-zone]
+
+profiles:
+  - id: empty-zone
+    description: Negative test - zone in empty top-left corner, expect zero events
+    rules:
+      # Zone in the top-left corner where nothing happens in this clip.
+      - id: empty-zone-entry
+        type: zone_entry
+        zone:
+          points:
+            - [0.02, 0.02]
+            - [0.15, 0.02]
+            - [0.15, 0.15]
+            - [0.02, 0.15]
+        classes:
+          include: [person, car]
+        debounce_frames: 3
+
+      # Line in the very top of the frame - nothing crosses it.
+      - id: empty-line
+        type: line_crossing
+        line:
+          start: [0.0, 0.05]
+          end: [1.0, 0.05]
+        direction: both
+        classes:
+          include: [person]
+        deadband: 0.01
+        debounce_frames: 2
