@@ -33,4 +33,4 @@ test-infra:
 	$(PYTEST) -q -m infra
 
 test-coverage:
-	$(PYTEST) -q --cov=ava --cov-branch --cov-report=term-missing
+	$(PYTEST) -q -m "not e2e and not infra" --cov=ava --cov-branch --cov-report=term-missing

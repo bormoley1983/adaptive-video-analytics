@@ -206,10 +206,11 @@ class TestEvidenceStore:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: engine -> record -> writer with evidence
+# Component integration: rule engine to persisted evidence
 # ---------------------------------------------------------------------------
 
-class TestEndToEnd:
+@pytest.mark.integration
+class TestEventPipelineIntegration:
     def test_engine_event_becomes_record_with_evidence(self, tmp_path: Path):
         import numpy as np
 
