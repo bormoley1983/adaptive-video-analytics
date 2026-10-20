@@ -1,0 +1,23 @@
+# Private planning, design, backlog and session records are transferred manually.
+/docs/
+
+# Local runtime configuration; commit only sanitized examples.
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+
+# Generated environments, caches and outputs.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+/videos/
+/results/
+/models/
+/weights/
+*.pt
+*.engine
+*.onnx

@@ -1,0 +1,10 @@
+source: /videos/smoke.mp4
+gpu: "0"
+output_dir: /results/smoke
+jsonl: true
+annotate: true
+detector:
+  kind: conventional
+  model: /models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5

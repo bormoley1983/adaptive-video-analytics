@@ -1,0 +1,38 @@
+# AVA E-1: single-camera detection in a GPU-enabled container.
+#
+# - Explicit GPU selection via NVIDIA Container Toolkit (GPU 0 by default).
+# - Footage mounted read-only; results and model caches persisted.
+# - No external services: E-1 needs no database/broker/storage connection.
+#
+# Override the GPU with:  AVA_GPU=1 docker compose run ava ...
+name: ava
+
+services:
+  ava:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ava/e1:local
+    # Run a one-shot detection pass; override the command to `ava --help` etc.
+    entrypoint: ["ava"]
+    command: ["run", "--config", "/configs/run.yaml"]
+    environment:
+      - CUDA_VISIBLE_DEVICES=${AVA_GPU:-0}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # Select a single GPU by index; change to a UUID for stability.
+              device_ids: ["${AVA_GPU:-0}"]
+              capabilities: [gpu]
+    volumes:
+      # Footage is read-only (ADR-7).
+      - ./videos:/videos:ro
+      # Persisted model/asset cache so reruns do not re-download.
+      - ./models:/models
+      # Results and evidence outputs.
+      - ./results:/results
+      # Sanitized run configs only; private docs are never mounted or built in.
+      - ./configs:/configs:ro
+    # Do not expose any ports: E-1 is a local offline PoC.

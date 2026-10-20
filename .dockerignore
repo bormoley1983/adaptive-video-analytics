@@ -1,0 +1,18 @@
+# Private documentation must not enter build contexts or images.
+docs/
+.git/
+.env
+.env.*
+*.local.yaml
+*.local.yml
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+videos/
+results/
+models/
+weights/
+*.pt
+*.engine
+*.onnx

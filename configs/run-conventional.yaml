@@ -1,0 +1,12 @@
+# E-1 conventional detection run (YOLO26n + ByteTrack).
+# Paths are container-internal; Compose mounts the host dirs at these locations.
+source: /videos/input.mp4
+gpu: "0"
+output_dir: /results/conventional
+jsonl: true
+annotate: true
+detector:
+  kind: conventional
+  model: /models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5

@@ -1,0 +1,21 @@
+# E-1 text-prompted detection run (YOLOE-26 small + MobileCLIP text encoder).
+# Classes are configured before the run (ADR-3); absent classes are recorded,
+# not claimed as detected.
+source: /videos/input.mp4
+gpu: "0"
+output_dir: /results/prompted
+jsonl: true
+annotate: true
+detector:
+  kind: prompted
+  model: /models/yoloe-26s-seg.pt
+  text_encoder: /models/mobileclip2_b.ts
+  prompts:
+    - person
+    - backpack
+    - car
+    - motorcycle
+    - fire extinguisher
+    - bag
+  confidence: 0.35
+  iou: 0.5
