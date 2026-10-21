@@ -57,6 +57,15 @@ class Detector:
         """Load weights and any text-encoder assets. Idempotent."""
         raise NotImplementedError
 
+    def reset_tracker(self) -> None:
+        """Clear any persistent tracker state before a new stream.
+
+        The default is a no-op for detector paths without tracking (e.g. the
+        prompted path, which uses ``predict()`` and assigns no track IDs).
+        Tracking backends override this to start each camera on a fresh
+        tracker/session.
+        """
+
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:  # pragma: no cover - abstract stub
         """Run inference on one BGR frame and return metadata."""
         raise NotImplementedError
@@ -81,11 +90,27 @@ class ConventionalDetector(Detector):
         # Warm the CUDA context so first-frame timing is not skewed.
         self._model.to(self.device)
 
+    def reset_tracker(self) -> None:
+        """Clear all tracker state so the next stream starts a fresh session.
+
+        Ultralytics caches one predictor (and its ByteTrack instance) on the
+        model across ``track()`` calls, and ``persist=True`` keeps that tracker
+        alive between calls. Without this reset, track IDs and Kalman state
+        would leak from one camera's clip into the next in a multi-camera run.
+        Calling it before each camera gives every stream its own authoritative
+        tracker/session (B-015). No-op until ``load()`` has built the model.
+        """
+        if self._model is None:
+            return
+        predictor = getattr(self._model, "predictor", None)
+        for tracker in list(getattr(predictor, "trackers", []) or []):
+            tracker.reset()
+
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
         assert self._model is not None, "call load() first"  # pragma: no branch
         # Use track() (not predict()) so ultralytics registers the ByteTrack
         # callbacks. persist=True keeps one tracker instance across frames so
-        # frame_id increments and track identity is maintained.
+        # frame_id increments and track identity is maintained within a stream.
         results = self._model.track(
             bgr_frame,
             conf=self.confidence,

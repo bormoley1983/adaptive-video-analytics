@@ -224,3 +224,55 @@ def test_prompted_detect_loaded_model_passes_guard(tmp_path) -> None:
     frame = np.zeros((100, 200, 3), dtype=np.uint8)
     result = det.detect(0, 0.0, frame)
     assert len(result.detections) == 1
+
+
+# --- tracker reset (per-camera isolation) ------------------------------------
+
+
+class _FakeTracker:
+    """Stands in for a ByteTrack instance that exposes reset()."""
+
+    def __init__(self):
+        self.reset_calls = 0
+
+    def reset(self):
+        self.reset_calls += 1
+
+
+def test_conventional_reset_tracker_clears_persistent_trackers(tmp_path) -> None:
+    # A loaded model caches one predictor holding the persistent tracker.
+    det = ConventionalDetector(tmp_path / "yolo26n.pt", device=None)
+    boxes = _FakeBoxes(xyxy=[(10, 20, 50, 100)], cls=[0], conf=[0.9], ids=[3])
+    model = _fake_model(boxes, {0: "person"})
+    tracker = _FakeTracker()
+    model.predictor = type("P", (), {"trackers": [tracker]})()
+    det._model = model
+
+    det.reset_tracker()
+
+    assert tracker.reset_calls == 1
+
+
+def test_conventional_reset_tracker_noop_without_model(tmp_path) -> None:
+    # Before load() there is no predictor to reset; the call must not raise.
+    det = ConventionalDetector(tmp_path / "yolo26n.pt", device=None)
+
+    det.reset_tracker()  # must not raise
+
+
+def test_conventional_reset_tracker_noop_without_predictor(tmp_path) -> None:
+    # A model that has never run track() holds no predictor yet.
+    det = ConventionalDetector(tmp_path / "yolo26n.pt", device=None)
+    boxes = _FakeBoxes(xyxy=[(10, 20, 50, 100)], cls=[0], conf=[0.9], ids=[3])
+    det._model = _fake_model(boxes, {0: "person"})
+
+    det.reset_tracker()  # must not raise
+
+
+def test_prompted_reset_tracker_is_noop(tmp_path) -> None:
+    # The prompted path assigns no track IDs; reset is a harmless no-op.
+    det = PromptedDetector(tmp_path / "yoloe.pt", device=None, prompts=["person"])
+    boxes = _FakeBoxes(xyxy=[(10, 20, 50, 100)], cls=[0], conf=[0.8])
+    det._model = _fake_model(boxes, {0: "person"})
+
+    det.reset_tracker()  # must not raise
