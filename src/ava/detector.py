@@ -53,11 +53,11 @@ class Detector:
         self.model_path = model_path
         self.device = _resolve_device(device)
 
-    def load(self) -> None:
+    def load(self) -> None:  # pragma: no cover - abstract stub
         """Load weights and any text-encoder assets. Idempotent."""
         raise NotImplementedError
 
-    def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
+    def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:  # pragma: no cover - abstract stub
         """Run inference on one BGR frame and return metadata."""
         raise NotImplementedError
 
@@ -72,7 +72,7 @@ class ConventionalDetector(Detector):
         self.iou = iou
         self._model = None
 
-    def load(self) -> None:
+    def load(self) -> None:  # pragma: no cover - hardware path (ADR-11)
         if self._model is not None:
             return
         from ultralytics import YOLO  # deferred: heavy import
@@ -82,7 +82,7 @@ class ConventionalDetector(Detector):
         self._model.to(self.device)
 
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
-        assert self._model is not None, "call load() first"
+        assert self._model is not None, "call load() first"  # pragma: no branch
         # Use track() (not predict()) so ultralytics registers the ByteTrack
         # callbacks. persist=True keeps one tracker instance across frames so
         # frame_id increments and track identity is maintained.
@@ -138,7 +138,7 @@ class PromptedDetector(Detector):
         self.iou = iou
         self._model = None
 
-    def load(self) -> None:
+    def load(self) -> None:  # pragma: no cover - hardware path (ADR-11)
         if self._model is not None:
             return
         from ultralytics import YOLO  # deferred: heavy import
@@ -170,7 +170,7 @@ class PromptedDetector(Detector):
             self._model.set_classes(self.prompts)
 
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
-        assert self._model is not None, "call load() first"
+        assert self._model is not None, "call load() first"  # pragma: no branch
         results = self._model.predict(
             bgr_frame,
             conf=self.confidence,

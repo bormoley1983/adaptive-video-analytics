@@ -21,7 +21,6 @@ bounded window of frames (clip) into the run's evidence directory.
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,7 +75,7 @@ class EventRecord:
     @classmethod
     def from_rule_event(cls, event: RuleEvent, *, config_version: str,
                         model_ref: str | None,
-                        evidence: EvidenceLocator | None = None) -> "EventRecord":
+                        evidence: EvidenceLocator | None = None) -> EventRecord:
         return cls(
             schema_version=event.schema_version,
             event_id=event.event_id,
@@ -175,7 +174,7 @@ class EvidenceStore:
         """
         import cv2  # deferred: heavy import
 
-        max_frames = max(1, int(round(fps * clip_seconds)))
+        max_frames = max(1, round(fps * clip_seconds))
         frames = frames[:max_frames]
         if not frames:
             return EvidenceLocator()

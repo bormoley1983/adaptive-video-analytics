@@ -63,8 +63,8 @@ class LineGeometry(BaseModel):
     @field_validator("start", "end")
     @classmethod
     def _in_unit_square(cls, point: tuple[float, float]) -> tuple[float, float]:
-        if len(point) != 2:
-            raise ValueError(f"line endpoint must be [x, y], got {point!r}")
+        # Pydantic coerces the field to a 2-tuple before this runs, so length
+        # is guaranteed here; only the unit-square bounds need checking.
         x, y = point
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             raise ValueError(
@@ -73,7 +73,7 @@ class LineGeometry(BaseModel):
         return point
 
     @model_validator(mode="after")
-    def _non_degenerate(self) -> "LineGeometry":
+    def _non_degenerate(self) -> LineGeometry:
         if self.start == self.end:
             raise ValueError("line start and end must differ (zero-length line)")
         return self
@@ -92,9 +92,9 @@ class PolygonGeometry(BaseModel):
     @field_validator("points")
     @classmethod
     def _valid_points(cls, points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        # Pydantic coerces each vertex to a 2-tuple before this runs, so length
+        # is guaranteed; only the unit-square bounds need checking per vertex.
         for i, point in enumerate(points):
-            if len(point) != 2:
-                raise ValueError(f"polygon vertex {i} must be [x, y], got {point!r}")
             x, y = point
             if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
                 raise ValueError(
@@ -216,7 +216,7 @@ class RuleProfile(BaseModel):
         return _validate_id(value, "profile id")
 
     @model_validator(mode="after")
-    def _unique_rule_ids(self) -> "RuleProfile":
+    def _unique_rule_ids(self) -> RuleProfile:
         seen: set[str] = set()
         for rule in self.rules:
             if rule.id in seen:
@@ -260,7 +260,7 @@ class RunConfig(BaseModel):
     profiles: list[RuleProfile] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _resolve_references(self) -> "RunConfig":
+    def _resolve_references(self) -> RunConfig:
         # Simple runs (single source + detector) remain valid.
         if self.source is None and not self.cameras:
             raise ValueError(

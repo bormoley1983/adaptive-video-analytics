@@ -11,16 +11,15 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import RunConfig
 from .detector import ConventionalDetector, Detector, PromptedDetector
 from .events import EventRecord, EventWriter, EvidenceStore
 from .ingest import iter_frames, probe
 from .output import AnnotatedVideoWriter, JsonlWriter
-from .rules import RuleEngine
+from .rules import RuleEngine, RuleEvent
 from .timing import PhaseTimer, peak_gpu_memory_bytes, reset_peak_gpu_memory
-
 
 # Frames treated as warm-up (CUDA context, cuDNN autotune, tracker state init)
 # and excluded from steady-state latency statistics.
@@ -57,13 +56,12 @@ class RunSummary:
 
 def _utc_now_iso() -> str:
     """Wall-clock UTC in ISO-8601 (emitted_utc for live/replay runs)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def _evidence_for(rule, event: "RuleEvent", store: EvidenceStore,
+def _evidence_for(rule, event: RuleEvent, store: EvidenceStore,
                   frame_buffer: deque, fps: float):
     """Materialize evidence for one event per the rule's evidence options."""
-    from .config import DwellRule, LineCrossingRule, ZoneEntryRule
 
     opts = rule.evidence
     if not (opts.snapshot or opts.clip):
@@ -74,12 +72,10 @@ def _evidence_for(rule, event: "RuleEvent", store: EvidenceStore,
             if idx == event.frame_index:
                 return store.save_snapshot(event.camera_id, event.event_id, bgr)
         return None
-    if opts.clip:
-        # Bounded window ending at the triggering frame.
-        window = list(frame_buffer)[-int(round(fps * opts.clip_seconds)):]
-        return store.save_clip(event.camera_id, event.event_id, window, fps,
-                               opts.clip_seconds)
-    return None
+    # Clip: bounded window ending at the triggering frame.
+    window = list(frame_buffer)[-round(fps * opts.clip_seconds):]
+    return store.save_clip(event.camera_id, event.event_id, window, fps,
+                           opts.clip_seconds)
 
 
 def build_detector(config: RunConfig) -> Detector:
@@ -178,8 +174,8 @@ def run(config: RunConfig) -> RunSummary:
     if infer_steady:
         ordered = sorted(infer_steady)
         n = len(ordered)
-        summary.infer_p50_s = ordered[int(round(0.50 * (n - 1)))]
-        summary.infer_p95_s = ordered[int(round(0.95 * (n - 1)))]
+        summary.infer_p50_s = ordered[round(0.50 * (n - 1))]
+        summary.infer_p95_s = ordered[round(0.95 * (n - 1))]
         summary.infer_mean_s = sum(infer_steady) / n
 
     if on_gpu:
@@ -246,7 +242,7 @@ def _run_cameras(config: RunConfig) -> RunSummary:
             (r.evidence.clip_seconds for r in rules if r.evidence.clip),
             default=3.0,
         )
-        buf_len = max(1, int(round(fps * max_clip_s))) if fps > 0 else 30
+        buf_len = max(1, round(fps * max_clip_s)) if fps > 0 else 30
         frame_buffer: deque = deque(maxlen=buf_len)
 
         for frame in iter_frames(cam.source):
@@ -259,6 +255,12 @@ def _run_cameras(config: RunConfig) -> RunSummary:
 
             summary.frames += 1
             summary.detections += len(result.detections)
+
+            # Keep the current frame in the buffer before rule evaluation so a
+            # snapshot of the triggering frame can be materialized (the event's
+            # frame_index is this frame).
+            if any(r.evidence.snapshot or r.evidence.clip for r in rules):
+                frame_buffer.append((frame.index, frame.bgr))
 
             # Rule evaluation (source-time based; discontinuities reset state).
             emitted_utc = _utc_now_iso()
@@ -276,21 +278,16 @@ def _run_cameras(config: RunConfig) -> RunSummary:
                 event_writer.write(record)
                 summary.events += 1
 
-            # Keep the frame in the buffer only while it may be needed for
-            # evidence of a not-yet-emitted event.
-            if any(r.evidence.snapshot or r.evidence.clip for r in rules):
-                frame_buffer.append((frame.index, frame.bgr))
-
             timer.begin("output")
-            if jsonl_writer:
-                jsonl_writer.write(result)
+            # The camera path always writes per-camera JSONL; only the
+            # annotated video is optional.
+            jsonl_writer.write(result)
             if video_writer:
                 video_writer.write(result, frame.bgr)
             timer.end("output")
 
-        if jsonl_writer:
-            jsonl_writer.close()
-            summary.output_paths.append(str(jsonl_writer.path))
+        jsonl_writer.close()
+        summary.output_paths.append(str(jsonl_writer.path))
         if video_writer:
             video_writer.close()
             summary.output_paths.append(str(video_writer.path))

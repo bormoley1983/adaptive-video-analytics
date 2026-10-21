@@ -1,8 +1,8 @@
 # E-2 quality baseline report
 
-Status: **measured** — rule-driven analytics over the E-1 crosswalk clip with
-ByteTrack tracking. This is a functional PoC baseline, **not** a production
-accuracy certification (see Limitations).
+Status: **partially measured** — line/zone analytics over the E-1 crosswalk clip
+with ByteTrack tracking. This is a functional demonstration, **not** a complete
+E-2 gate or production accuracy certification (see Limitations).
 
 ## Environment
 
@@ -136,16 +136,31 @@ state is small relative to model weights.
 5. **Replay is not paced.** Same as E-1: wall-clock (22 s) < source duration
    (29.5 s). This is offline batch processing, not live streaming.
 
+6. **Evidence is not materialized by the measured runner.** The event records
+   have empty evidence locators and the result tree contains no snapshots or
+   clips. The runner processes an event before it places the trigger frame in
+   the evidence buffer; clip assembly is also pre-event rather than centred on
+   the incident. This is tracked as B-012, so E-2-T3 is not complete.
+
+7. **Reruns are not isolated.** The event writer appends to an existing JSONL
+   file. Reusing an output directory can silently combine separate executions;
+   use a fresh result directory until B-012 is resolved.
+
 ## Acceptance status
 
 | Criterion | Status |
 |---|---|
 | Line crossing fires on configured line | ✅ 22 events |
 | Zone entry fires on configured polygon | ✅ 58 events |
-| Dwell rule implemented and unit-tested | ✅ (0 events on this clip — see limitation 3) |
+| Dwell rule implemented and unit-tested | ⚠️ fixtures pass; no positive real-video event |
 | Config-only change alters behaviour | ✅ 80→26 events, no code edits |
 | Negative clip produces zero events | ✅ 0 events |
 | Track IDs populated and stable | ✅ 99.99% non-null, persistent across frames |
 | Event IDs follow ADR-5 format | ✅ `cam/session/track/rule/kind-n` |
+| Event evidence resolves to the incident | ❌ no evidence files in measured run; B-012 |
 | Reproducible commands recorded | ✅ above |
 | Annotated precision/recall baseline | ❌ deferred to B-003 |
+
+Accordingly, E-2-T1/T2 are implemented, E-2-T3/T4 are partial, and E-2-T5 is
+open. The next benchmark must use a fresh output directory and include a
+dwell-positive clip plus resolvable evidence before this report can close E-2.

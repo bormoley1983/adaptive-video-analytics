@@ -7,42 +7,45 @@ from pathlib import Path
 
 import pytest
 
-from ava.config import CONFIG_SCHEMA_VERSION, DwellRule, LineCrossingRule, PolygonGeometry, LineGeometry
+from ava.config import (
+    CONFIG_SCHEMA_VERSION,
+    LineCrossingRule,
+    LineGeometry,
+)
 from ava.events import EventRecord, EventWriter, EvidenceLocator, EvidenceStore
 from ava.rules import RuleEngine, RuleEvent
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _crossing_rule(**kw) -> LineCrossingRule:
-    defaults = dict(
-        id="cross",
-        line=LineGeometry(start=(0.0, 0.5), end=(1.0, 0.5)),
-        direction="both",
-        deadband=0.0,
-        debounce_frames=0,
-    )
+    defaults = {
+        "id": "cross",
+        "line": LineGeometry(start=(0.0, 0.5), end=(1.0, 0.5)),
+        "direction": "both",
+        "deadband": 0.0,
+        "debounce_frames": 0,
+    }
     defaults.update(kw)
     return LineCrossingRule(**defaults)
 
 
 def _make_event(event_id: str = "cam-01/s1/t1/cross/crossing-0", **kw) -> RuleEvent:
-    defaults = dict(
-        schema_version="1",
-        event_id=event_id,
-        camera_id="cam-01",
-        session_id="s1",
-        track_id=1,
-        rule_id="cross",
-        rule_type="line_crossing",
-        class_label="person",
-        confidence=0.92,
-        source_time_s=12.34,
-        emitted_utc="2026-01-01T00:00:00Z",
-        payload={"from_side": -1, "to_side": 1},
-    )
+    defaults = {
+        "schema_version": "1",
+        "event_id": event_id,
+        "camera_id": "cam-01",
+        "session_id": "s1",
+        "track_id": 1,
+        "rule_id": "cross",
+        "rule_type": "line_crossing",
+        "class_label": "person",
+        "confidence": 0.92,
+        "source_time_s": 12.34,
+        "emitted_utc": "2026-01-01T00:00:00Z",
+        "payload": {"from_side": -1, "to_side": 1},
+    }
     defaults.update(kw)
     return RuleEvent(**defaults)
 
@@ -119,7 +122,8 @@ class TestEventWriter:
         # First run.
         w1 = EventWriter(path)
         engine1 = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="s1")
-        from tests.test_rules_engine import det, frame as mkframe
+        from tests.test_rules_engine import det
+        from tests.test_rules_engine import frame as mkframe
         frames = [
             mkframe(0, 0.0, [det(1, 0.2, 0.3)]),
             mkframe(1, 0.1, [det(1, 0.8, 0.7)]),
@@ -170,6 +174,31 @@ class TestEventWriter:
             "cam-01/s1/t1/cross/crossing-1",
         ]
 
+    def test_dedupe_rebuild_skips_malformed_lines(self, tmp_path: Path):
+        """Crash recovery tolerates a truncated/partial line in the existing
+        output: malformed lines are ignored while valid IDs are still deduped."""
+        path = tmp_path / "events.jsonl"
+        rec = EventRecord.from_rule_event(_make_event(), config_version="1", model_ref=None)
+        # Pre-existing file with one valid ID, one truncated line and a blank.
+        path.write_text(
+            json.dumps({"event_id": rec.event_id}) + "\n"
+            + '{"event_id": "cam-01/s1/t1/cross/cros'  # truncated JSON
+            + "\n\n",
+            encoding="utf-8",
+        )
+        writer = EventWriter(path, dedupe=True)
+        assert writer.write(rec) is False  # valid ID still recognized
+        rec2 = EventRecord.from_rule_event(
+            _make_event(event_id="cam-01/s1/t1/cross/crossing-1"),
+            config_version="1", model_ref=None,
+        )
+        assert writer.write(rec2) is True  # new ID writes
+        writer.close()
+
+        lines = path.read_text().strip().splitlines()
+        # original valid + truncated + blank + newly appended
+        assert len(lines) == 4
+
 
 # ---------------------------------------------------------------------------
 # EvidenceStore
@@ -204,6 +233,37 @@ class TestEvidenceStore:
         assert loc.kind is None
         assert loc.path is None
 
+    def test_snapshot_write_failure_raises(self, tmp_path: Path, monkeypatch):
+        import cv2
+        import numpy as np
+
+        store = EvidenceStore(tmp_path)
+        frame = np.zeros((48, 64, 3), dtype=np.uint8)
+        monkeypatch.setattr(cv2, "imwrite", lambda *a, **k: False)
+        with pytest.raises(RuntimeError, match="failed to write snapshot"):
+            store.save_snapshot("cam-01", "ev-fail", frame)
+
+    def test_clip_writer_not_opened_raises(self, tmp_path: Path, monkeypatch):
+        import cv2
+        import numpy as np
+
+        store = EvidenceStore(tmp_path)
+        frames = [(0, np.zeros((48, 64, 3), dtype=np.uint8))]
+
+        class _BrokenWriter:
+            def isOpened(self):
+                return False
+
+            def write(self, *a, **k):
+                raise AssertionError("write must not be called")
+
+            def release(self):
+                pass
+
+        monkeypatch.setattr(cv2, "VideoWriter", lambda *a, **k: _BrokenWriter())
+        with pytest.raises(RuntimeError, match="cannot open clip writer"):
+            store.save_clip("cam-01", "ev-fail", frames, fps=10.0, clip_seconds=1.0)
+
 
 # ---------------------------------------------------------------------------
 # Component integration: rule engine to persisted evidence
@@ -214,7 +274,8 @@ class TestEventPipelineIntegration:
     def test_engine_event_becomes_record_with_evidence(self, tmp_path: Path):
         import numpy as np
 
-        from tests.test_rules_engine import det, frame as mkframe
+        from tests.test_rules_engine import det
+        from tests.test_rules_engine import frame as mkframe
 
         rule = _crossing_rule()
         engine = RuleEngine([rule], camera_id="cam-01", session_id="s1")

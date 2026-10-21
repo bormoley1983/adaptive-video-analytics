@@ -67,6 +67,7 @@ class AnnotatedVideoWriter:
             cv2.putText(canvas, text, (x1, max(0, y1 - 6)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         self._writer.write(canvas)
+        return canvas
 
     def close(self) -> None:
         self._writer.release()

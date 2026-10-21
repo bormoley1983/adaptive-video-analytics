@@ -1,36 +1,61 @@
 # AVA agent instructions
 
-These instructions are model- and client-independent. Apply them when working through local Ollama/LiteLLM routes, Copilot, Claude Code or OpenAI Codex.
+Applies to every model and client.
 
-## Read before changing files
+## Before work
 
-1. Read `README.md` and inspect the working tree.
-2. If the private `docs/` tree is present, read `docs/intro.md`, the current development plan, applicable ADRs, `docs/tests_rules.md` and the latest progress entry.
-3. Preserve unrelated and concurrent edits. Do not rewrite another agent's active files merely to reformat or rename them.
-4. State the smallest observable outcome and validate assumptions against the repository before implementing.
+1. Read `README.md`; inspect status and relevant files.
+2. If `docs/` exists, read `docs/intro.md`, the active plan, applicable ADRs,
+   `docs/tests_rules.md` and latest progress entry.
+3. State one smallest observable outcome and its file scope. Verify assumptions.
+4. Preserve unrelated work. Do not reformat, rename or overwrite active files.
 
-## Implementation boundaries
+## Boundaries
 
-- Build the smallest working vertical slice. Do not introduce services or infrastructure before an active behavior needs them.
-- Keep ingestion, inference, tracking, rules, events and measurement separated by small explicit interfaces.
-- Treat GPU availability, camera capacity, latency and accuracy as measured facts, never assumptions. Do not stop shared GPU workloads or modify shared drivers without owner approval.
-- Keep private documentation, footage, model weights, credentials and generated results out of Git and container images. Commit only sanitized configuration examples.
-- Change an architectural decision through an ADR when the private docs are available; do not silently diverge.
+- Build the smallest working vertical slice. Add infrastructure only when active
+  behavior requires it.
+- Keep ingestion, inference, tracking, rules, events and measurement separated
+  by explicit interfaces.
+- Measure GPU availability, capacity, latency and accuracy. Do not stop shared
+  workloads or change drivers without owner approval.
+- Keep private docs, footage, weights, credentials and results out of Git and
+  images. Commit only sanitized examples.
+- Change architecture through an ADR when private docs are available.
 
-## Readable code and comments
+## Parallel work
 
-- Choose precise domain names and small functions so the code explains the behavior.
-- Add short comments only for non-obvious intent, constraints or tradeoffs. Do not narrate the code.
-- Do not reference epic, task or backlog numbers in source comments, test names or docstrings. Put planning traceability in progress documents, ADRs or change descriptions.
-- Keep configuration and public contracts explicit and validated before runtime work begins.
+- Use one sibling worktree and branch per task:
+  `../ava-worktrees/<task>` and `agent/<task>`. Never share a worktree.
+- Create it from an explicit committed base. Other worktrees' uncommitted changes
+  are not inherited.
+- Assign each worker an outcome and owned files. Coordinate before scopes overlap.
+- Workers make focused commits. The integrator reviews, merges or cherry-picks,
+  resolves overlaps and runs combined validation.
+- Ignored assets are not copied. Share `docs/`, `videos/` and `models/` read-only
+  only when needed; keep `results/` local; never copy credentials.
+- Only the integrator edits shared private progress/handoff docs. Workers report
+  required doc changes in their handoff.
+- Clean up only after integration or explicit abandonment and artifact recovery.
+  Never force-remove another agent's work.
 
-## Tests and validation
+## Code and validation
 
-- Follow `docs/tests_rules.md` when it is available. Use Arrange–Act–Assert and cover positive, negative, boundary and failure behavior.
-- Use `make test-unit`, `make test-integration`, `make test-e2e` and `make test-infra` for their distinct confidence levels. Use `make test-coverage` for the full line and branch coverage gate and `make lint` for static checks.
-- An unrun or unavailable suite is not a pass. Report the exact command, environment, result and missing prerequisite.
-- Do not claim GPU inference, performance or infrastructure readiness from mocked or CPU-only tests.
+- Prefer precise names and small functions. Comment only non-obvious intent or
+  constraints. Keep planning IDs out of source comments, tests and docstrings.
+- Validate configuration and public contracts before runtime work.
+- Follow `docs/tests_rules.md`. Use the separate `make test-unit`,
+  `test-integration`, `test-e2e`, `test-infra`, `test-coverage` and `lint` gates.
+- Report exact commands and results. Unrun or unavailable is not passed. Mocked
+  or CPU-only tests do not prove GPU, performance or infrastructure readiness.
 
-## Handoff
+## Context and handoff
 
-Summarize changed files, observable behavior, validation results, known limitations and the exact next action. When private docs are available, update the current progress record and `docs/intro.md` if the handoff, active milestone or repository-wide settings changed.
+- Keep one bounded subtask per agent session. Do not start unrelated work.
+- Before clearing or compacting context, finish the current safe checkpoint and
+  record: branch/base, changed files, behavior, commands/results, limitations,
+  requested private-doc updates and the exact next action.
+- Use a fresh session for a materially different subtask. Compaction may follow
+  a durable checkpoint; it must not replace repository records or happen during
+  an unfinished edit, test or merge.
+- Update affected `README.md` files before completion. Update current progress
+  and `docs/intro.md` only when handoff, milestone or repository settings change.

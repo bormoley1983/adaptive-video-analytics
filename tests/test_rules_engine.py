@@ -6,8 +6,6 @@ discontinuities, with explicit expected counts and times (ADR-4 semantics).
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from ava.config import (
@@ -93,12 +91,12 @@ def test_point_in_polygon() -> None:
 
 
 def _crossing_rule(**kw) -> LineCrossingRule:
-    base = dict(
-        id="cross",
-        line=LineGeometry(start=(0.0, 0.5), end=(1.0, 0.5)),
-        direction="both",
-        classes=ClassFilter(include=["person"]),
-    )
+    base = {
+        "id": "cross",
+        "line": LineGeometry(start=(0.0, 0.5), end=(1.0, 0.5)),
+        "direction": "both",
+        "classes": ClassFilter(include=["person"]),
+    }
     base.update(kw)
     return LineCrossingRule(**base)
 
@@ -185,7 +183,7 @@ ZONE = PolygonGeometry(points=[(0.4, 0.4), (0.9, 0.4), (0.9, 0.9), (0.4, 0.9)])
 
 
 def _entry_rule(**kw) -> ZoneEntryRule:
-    base = dict(id="zone", zone=ZONE, classes=ClassFilter(include=["person"]))
+    base = {"id": "zone", "zone": ZONE, "classes": ClassFilter(include=["person"])}
     base.update(kw)
     return ZoneEntryRule(**base)
 
@@ -243,10 +241,10 @@ def test_entry_debounce() -> None:
 
 
 def _dwell_rule(**kw) -> DwellRule:
-    base = dict(
-        id="dwell", zone=ZONE, classes=ClassFilter(include=["person"]),
-        dwell_seconds=1.0, missing_track_grace_s=0.5,
-    )
+    base = {
+        "id": "dwell", "zone": ZONE, "classes": ClassFilter(include=["person"]),
+        "dwell_seconds": 1.0, "missing_track_grace_s": 0.5,
+    }
     base.update(kw)
     return DwellRule(**base)
 

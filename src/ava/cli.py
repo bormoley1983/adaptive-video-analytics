@@ -32,8 +32,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = run(config)
         print(json.dumps(summary.to_dict(), indent=2))
         return 0
-    return 1
+    # Unreachable: argparse requires the "run" subcommand (required=True).
+    return 1  # pragma: no cover
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - console-script entry point
     sys.exit(main())

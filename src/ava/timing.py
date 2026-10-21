@@ -22,7 +22,7 @@ def _cuda_sync() -> None:
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-    except Exception:  # pragma: no cover - CPU smoke path
+    except ImportError:  # pragma: no cover - torch absent
         pass
 
 
@@ -64,7 +64,7 @@ class PhaseTimer:
         samples = sorted(self._samples.get(name, []))
         if not samples:
             return 0.0
-        rank = int(round((pct / 100.0) * (len(samples) - 1)))
+        rank = round((pct / 100.0) * (len(samples) - 1))
         return samples[rank]
 
     def mean(self, name: str) -> float:
@@ -79,7 +79,7 @@ def peak_gpu_memory_bytes() -> int:
 
         if torch.cuda.is_available():
             return int(torch.cuda.max_memory_allocated())
-    except Exception:  # pragma: no cover - CPU smoke path
+    except ImportError:  # pragma: no cover - torch absent
         pass
     return 0
 
@@ -90,6 +90,9 @@ def reset_peak_gpu_memory() -> None:
         import torch
 
         if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats()
-    except Exception:  # pragma: no cover - CPU smoke path
+            # Hardware-only: requires a live CUDA context. The nearest owned
+            # boundary (the call is dispatched) is validated with a mocked
+            # torch.cuda in the timing tests.
+            torch.cuda.reset_peak_memory_stats()  # pragma: no cover - GPU only
+    except ImportError:  # pragma: no cover - torch absent
         pass

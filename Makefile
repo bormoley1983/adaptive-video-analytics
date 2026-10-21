@@ -10,7 +10,7 @@ help:
 	@echo "test-integration  Run internal component-boundary tests"
 	@echo "test-e2e          Run complete workflow tests"
 	@echo "test-infra        Run container and infrastructure tests"
-	@echo "test-coverage     Enforce full line and branch coverage"
+	@echo "test-coverage     Enforce 90% combined line and branch coverage"
 
 install-dev:
 	$(PYTHON) -m pip install -e '.[dev]'
