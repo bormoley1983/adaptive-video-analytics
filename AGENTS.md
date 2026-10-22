@@ -54,6 +54,14 @@ Applies to every model and client.
 - Cap consecutive attempts at the same goal: after two distinct approaches
   yield no new information, report what was tried and what is unknown instead
   of continuing to probe.
+- Never truncate the output of a long-running or hard-to-reproduce command
+  with a cutter such as `| tail -N`, `| head -N`, or `2>&1 | ...`. Builds,
+  test runs, GPU workflows and installs can take minutes; cutting their output
+  hides progress, masks mid-stream failures, and destroys evidence needed for
+  review. Run the command so its full output is captured (let the terminal
+  buffer it, or redirect to a log file and read that file). If output is too
+  large to display, save it to a file and inspect the relevant portion from the
+  file rather than discarding it at the source.
 
 ## Parallel work
 
