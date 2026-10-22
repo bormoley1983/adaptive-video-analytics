@@ -25,6 +25,11 @@ Applies to every model and client.
   commit without a human approving that exact commit after reviewing its diff,
   validation results and proposed commit message. Approval is single-use; any
   material diff or message change requires fresh approval.
+- Never commit directly to `develop`. All work lands on a task branch
+  (`agent/<task>`), is reviewed through a merge request, and reaches `develop`
+  only via an explicitly human-approved merge. A direct commit already on
+  `develop` must not be rewritten or amended; leave it and apply this rule from
+  the next change onward.
 - Human gates are non-delegable. Silence, prior approvals, task instructions,
   test success and another agent's approval do not satisfy them. Agents stop at
   the gate and leave reviewable uncommitted changes when approval is absent.
