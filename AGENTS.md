@@ -41,6 +41,20 @@ Applies to every model and client.
   images. Commit only sanitized examples.
 - Change architecture through an ADR when private docs are available.
 
+## Tool-call discipline (dead-loop guard)
+
+- Never repeat a tool call with identical parameters expecting a different
+  result. If the same call returns the same output twice, stop retrying it.
+- An empty or unchanged result is a finding, not a failure to re-poll. Act on
+  it: change the query, broaden or narrow scope, read the file directly, or
+  state the conclusion and move on.
+- Before issuing any tool call, confirm it differs from the immediately
+  previous one in at least one meaningful parameter (pattern, path, range).
+  If it does not differ, do not issue it.
+- Cap consecutive attempts at the same goal: after two distinct approaches
+  yield no new information, report what was tried and what is unknown instead
+  of continuing to probe.
+
 ## Parallel work
 
 - Use one sibling worktree and branch per task:
