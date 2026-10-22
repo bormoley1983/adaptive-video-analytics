@@ -173,27 +173,6 @@ analysis FPS (every frame vs sampled), detector path, and live pacing are fixed
 roughly **6–8 concurrent streams** on one RTX 3090 for this workload; sampling at a
 lower analysis FPS scales that up proportionally.
 
-### Speculative comparison: RTX 3090 vs RTX 6000 Pro (Blackwell)
-
-No 6000 Pro is present on this host, so this is **spec-derived and directional**,
-not measured:
-
-| | RTX 3090 (measured host) | RTX 6000 Pro Blackwell |
-|---|---|---|
-| Architecture | Ampere (GA102) | Blackwell |
-| FP16/BF16 tensor throughput | ~71 TFLOPS | ~250+ TFLOPS (≈3–4×) |
-| Memory | 24 GB GDDR6X, ~936 GB/s | 96 GB GDDR7, ~1.8 TB/s (~2×) |
-
-**Directional expectation:** for the same detector at the same precision, expect
-roughly **3–4× the inference FPS** on the 6000 Pro — i.e., where the 3090 does
-~204 fps conventional, on the order of **600–800 fps**, pushing the every-frame
-25-fps stream estimate from ~8 to **~25–30 streams**. Larger VRAM/bandwidth also
-helps for bigger models or higher-res inputs.
-
-**Caveats:** real gains depend on compute- vs memory/decode-bound behavior; a
-TensorRT export typically adds another 1.5–2× over eager PyTorch for *both* GPUs
-and may shift the ratio; no 6000 Pro was benchmarked here.
-
 ### What would make this a real answer
 
 Per ADR-6's protocol: fix the workload (input/analysis FPS, detector path,

@@ -1,13 +1,27 @@
 # Adaptive Video Analytics (AVA)
 
-Single-camera offline video analytics proof of concept. It runs a
+AVA is an independent, free/self-hosted video-analytics learning project. Its
+mission is to build useful low-cost analytics, measure real capability and
+throughput on homelab hardware, and use the work to strengthen practical video
+analytics, IT, software-development and architecture skills. The repository is
+also a proving ground for disciplined, human-gated agent-driven development.
+
+The currently implemented slice is a single-camera offline proof of concept. It runs a
 **conventional** detector (YOLO26n + ByteTrack) or a **text-prompted** detector
 (YOLOE-26 small) on MP4 input. Configuration can add line-crossing, zone-entry
 and dwell rules, producing annotated video plus per-frame detection and event
 JSONL with measured timing.
 
-Scope: single-camera offline PoC — no RTSP, DeepStream, services, databases
-or dashboards. See `docs/` (private, not in Git) for planning, ADRs and progress.
+Implemented scope: single-camera offline PoC — no RTSP, DeepStream, services,
+databases or dashboards yet. The long-term roadmap retains an independent AVA
+API and UI after the runtime is measured and reliable. See `docs/` (private,
+not in Git) for planning, ADRs and progress.
+
+The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
+serves the local-AI stack and one is shared by AVA and other projects. AVA must
+measure live allocation before a run. The GPUs may be configured as a temporary
+test pool only for an explicitly approved experiment; they are never treated as
+pooled VRAM or permanently dedicated capacity.
 
 ## Layout
 
@@ -48,9 +62,10 @@ docker compose run --rm ava run --config /configs/run-e2-negative.yaml
 ```
 
 Outputs land under `results/<path>/`: `detections.jsonl` and `annotated.mp4`.
-Rule-enabled runs also write `events.jsonl`. The event/evidence contract exists,
-but real-run snapshot/clip materialization and clean rerun isolation are still
-open work; do not treat an evidence locator as verified until its file resolves.
+Rule-enabled runs also write `events.jsonl`. The event/evidence contract,
+snapshot/clip materialization and run isolation exist, but evidence-window
+correctness remains subject to the documented validation gates; do not treat a
+locator as verified until its file resolves.
 Override the GPU with `AVA_GPU=<index-or-uuid> docker compose run ...`.
 
 ## Development checks
