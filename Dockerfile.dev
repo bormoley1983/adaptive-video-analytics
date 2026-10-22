@@ -1,0 +1,13 @@
+# AVA development image.
+#
+# Builds on the inference image (ava/e1:local) and adds the test/lint tooling
+# from the `dev` extra into the same venv, so the validation gates run against
+# the exact locked inference stack rather than an ad-hoc host interpreter.
+# Dev tools are unpinned extras; they do not affect requirements.lock.txt or the
+# inference runtime (B-018).
+FROM ava/e1:local
+
+RUN /opt/venv/bin/pip install --no-cache-dir pytest pytest-cov ruff
+
+# Gates invoke python directly (pytest, ruff), not the `ava` CLI entrypoint.
+ENTRYPOINT ["python"]
