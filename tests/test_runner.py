@@ -36,9 +36,13 @@ class _FakeDetector:
         self.device = device
         self.n_frames = n_frames
         self.loaded = False
+        self.reset_calls = 0
 
     def load(self):
         self.loaded = True
+
+    def reset_tracker(self):
+        self.reset_calls += 1
 
     def detect(self, frame_index, timestamp_s, bgr_frame):
         # Alternate sides of the y=0.5 line so a crossing rule fires once.
@@ -156,21 +160,25 @@ def _crossing_rule(**kw):
     return LineCrossingRule(**base)
 
 
-def _camera_config(tmp_path: Path, snapshot: bool = False):
+def _camera_config(tmp_path: Path, snapshot: bool = False, n_cams=1):
     from ava.config import EvidenceOptions
 
     rule = _crossing_rule(
         evidence=EvidenceOptions(snapshot=snapshot),
     )
     profile = RuleProfile(id="p1", rules=[rule])
-    cam = CameraConfig(id="cam-01", source=tmp_path / "in.mp4", profiles=["p1"])
+    cams = [
+        CameraConfig(id=f"cam-{i:02d}", source=tmp_path / f"in{i}.mp4",
+                     profiles=["p1"])
+        for i in range(1, n_cams + 1)
+    ]
     return RunConfig(
         detector=DetectorConfig(kind="conventional", model=tmp_path / "m.pt"),
         output_dir=tmp_path / "out",
         gpu=None,
         jsonl=True,
         annotate=False,
-        cameras=[cam],
+        cameras=cams,
         profiles=[profile],
     )
 
@@ -192,6 +200,19 @@ def test_camera_run_emits_events_and_per_camera_jsonl(tmp_path, monkeypatch):
     # Per-camera detection JSONL.
     cam_jsonl = tmp_path / "out" / "cam-01.jsonl"
     assert cam_jsonl.exists()
+
+
+def test_camera_run_resets_tracker_once_per_camera(tmp_path, monkeypatch):
+    """Each camera starts on a fresh tracker/session."""
+    detector = _FakeDetector()
+    _patch_ingest(monkeypatch, n=3, detector=detector)
+    config = _camera_config(tmp_path, n_cams=2)
+
+    summary = runner.run(config)
+
+    # One reset before each of the two camera streams.
+    assert detector.reset_calls == 2
+    assert summary.frames == 6
 
 
 def test_camera_run_snapshot_evidence_written(tmp_path, monkeypatch):

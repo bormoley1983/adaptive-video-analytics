@@ -282,6 +282,12 @@ def _run_cameras(config: RunConfig) -> RunSummary:
 
     start = time.perf_counter()
     for cam in config.cameras:
+        # One authoritative tracker/session per camera: clear any tracker state
+        # left by the previous camera's clip so track IDs and Kalman state do
+        # not leak across streams. No-op for trackers that are already
+        # fresh or for detector paths without persistent tracking.
+        detector.reset_tracker()
+
         meta = probe(cam.source)
         fps = meta["fps"] or 0.0
 
