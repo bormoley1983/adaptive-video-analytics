@@ -18,6 +18,7 @@ scripts/          Asset fetch helper
 tests/            Deterministic contract checks (no GPU required)
 benchmarks/e-1/   Measured detector baseline
 benchmarks/e-2/   Measured rule demonstration and current limitations
+requirements.lock.txt  Exact tested runtime dependency closure used by Docker
 Dockerfile        CUDA inference image
 docker-compose.yml  GPU-enabled one-shot run
 ```
