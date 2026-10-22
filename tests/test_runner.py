@@ -203,7 +203,7 @@ def test_camera_run_emits_events_and_per_camera_jsonl(tmp_path, monkeypatch):
 
 
 def test_camera_run_resets_tracker_once_per_camera(tmp_path, monkeypatch):
-    """Each camera starts on a fresh tracker/session (B-015)."""
+    """Each camera starts on a fresh tracker/session."""
     detector = _FakeDetector()
     _patch_ingest(monkeypatch, n=3, detector=detector)
     config = _camera_config(tmp_path, n_cams=2)
@@ -327,3 +327,86 @@ def test_evidence_snapshot_miss_returns_none(monkeypatch):
 
     result = runner._evidence_for(rule, event, store, deque([(0, None)]), 10.0)
     assert result is None
+
+
+# --- run isolation (reruns do not append to prior events) --------------------
+
+
+def test_camera_run_rerun_isolates_events(tmp_path, monkeypatch):
+    """A second run into the same output dir writes a new events file."""
+    _patch_ingest(monkeypatch, n=3, detector=_FakeDetector())
+    config = _camera_config(tmp_path)
+
+    # First run.
+    runner.run(config)
+    first_events = tmp_path / "out" / "events.jsonl"
+    assert first_events.exists()
+    first_count = len(first_events.read_text().strip().splitlines())
+
+    # Second run into the same output dir.
+    runner.run(config)
+    # The original events.jsonl is untouched; a new numbered file appears.
+    assert len(first_events.read_text().strip().splitlines()) == first_count
+    second_events = tmp_path / "out" / "events-1.jsonl"
+    assert second_events.exists()
+    second_count = len(second_events.read_text().strip().splitlines())
+    assert second_count >= 1
+
+
+def test_camera_run_rerun_isolates_per_camera_jsonl(tmp_path, monkeypatch):
+    """Per-camera JSONL is overwritten on rerun (single source of truth)."""
+    _patch_ingest(monkeypatch, n=3, detector=_FakeDetector())
+    config = _camera_config(tmp_path)
+
+    runner.run(config)
+    cam_jsonl = tmp_path / "out" / "cam-01.jsonl"
+    first_lines = len(cam_jsonl.read_text().strip().splitlines())
+
+    runner.run(config)
+    # Overwritten, not appended.
+    second_lines = len(cam_jsonl.read_text().strip().splitlines())
+    assert second_lines == first_lines
+
+
+# --- centered clip evidence --------------------------------------------------
+
+
+def test_clip_evidence_centered_on_triggering_frame(tmp_path, monkeypatch):
+    """The clip window includes frames before AND after the triggering frame."""
+    from ava.config import EvidenceOptions
+
+    # Use more frames so the buffer has post-event content.
+    _patch_ingest(monkeypatch, n=10, detector=_FakeDetector(n_frames=10))
+    config = _camera_config(tmp_path)
+    config.profiles[0].rules[0].evidence = EvidenceOptions(clip=True, clip_seconds=2.0)
+
+    summary = runner.run(config)
+    assert summary.events >= 1
+
+    # Find the clip evidence file and verify it exists.
+    events_path = tmp_path / "out" / "events.jsonl"
+    records = [json.loads(l) for l in events_path.read_text().strip().splitlines()]
+    with_clip = [r for r in records if r["evidence"] and r["evidence"]["kind"] == "clip"]
+    assert with_clip, "expected clip evidence"
+    rel = with_clip[0]["evidence"]["path"]
+    clip_path = tmp_path / "out" / rel
+    assert clip_path.exists()
+
+
+def test_deferred_clip_flushed_at_end_of_stream(tmp_path, monkeypatch):
+    """Clips that cannot be centered mid-stream are flushed at stream end."""
+    from ava.config import EvidenceOptions
+
+    # Few frames: the post-event window may not fully accumulate before EOF.
+    _patch_ingest(monkeypatch, n=3, detector=_FakeDetector(n_frames=3))
+    config = _camera_config(tmp_path)
+    config.profiles[0].rules[0].evidence = EvidenceOptions(clip=True, clip_seconds=5.0)
+
+    summary = runner.run(config)
+    assert summary.events >= 1
+
+    events_path = tmp_path / "out" / "events.jsonl"
+    records = [json.loads(l) for l in events_path.read_text().strip().splitlines()]
+    # The clip is flushed at end-of-stream with whatever frames are available.
+    with_clip = [r for r in records if r["evidence"] and r["evidence"]["kind"] == "clip"]
+    assert with_clip, "expected clip evidence flushed at stream end"

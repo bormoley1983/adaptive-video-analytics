@@ -24,11 +24,15 @@ WORKDIR /app
 
 # Install the package and its locked dependencies. The git+CLIP dependency is
 # fetched at build time so inference never triggers a first-use pip install.
-COPY pyproject.toml README.md ./
+# B-016: install the exact measured stack from requirements.lock.txt first, then
+# the `ava` package itself (no-deps) so a clean rebuild reproduces the tested
+# versions exactly and a moving @main ref can never drift.
+COPY pyproject.toml README.md requirements.lock.txt ./
 COPY src ./src
 RUN python3.12 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install .
+    && /opt/venv/bin/pip install -r requirements.lock.txt \
+    && /opt/venv/bin/pip install --no-deps .
 
 ENV PATH="/opt/venv/bin:$PATH"
 

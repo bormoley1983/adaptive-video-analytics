@@ -1,8 +1,9 @@
 # E-2 quality baseline report
 
-Status: **partially measured** — line/zone analytics over the E-1 crosswalk clip
-with ByteTrack tracking. This is a functional demonstration, **not** a complete
-E-2 gate or production accuracy certification (see Limitations).
+Status: **functionally validated** — line/zone/dwell analytics over the E-1
+crosswalk clip with ByteTrack tracking, evidence materialization, and run
+isolation confirmed on GPU (2026-10-21). This is a functional demonstration,
+**not** a production accuracy certification (see Limitations).
 
 ## Environment
 
@@ -49,28 +50,57 @@ docker compose run --rm ava run --config /configs/run-e2-negative.yaml
 The single null track_id is a first-frame edge case (track activated on frame 0
 before the tracker assigns an ID). All subsequent detections carry stable IDs.
 
-## Positive run results (`run-e2-rules.yaml`)
+## Positive run results (`run-e2-rules.yaml`) — 2026-10-21 GPU validation
 
 | Metric | Value |
 |---|---|
 | Frames | 1768 |
 | Detections | 16,529 |
-| Wall-clock | 22.07 s |
-| Inference phase | 10.63 s |
-| Output phase | 9.81 s |
-| Events fired | 80 |
+| Wall-clock | 22.11 s |
+| Inference phase | 10.53 s |
+| Output phase | 9.83 s |
+| Events fired | 54 |
+| Evidence resolved | **54/54 (100%)** |
 
 ### Event breakdown
 
 | Rule | Type | Count | Classes |
 |---|---|---|---|
-| `restricted-zone` | zone_entry | 58 | person 52, car 6 |
-| `crosswalk-crossing` | line_crossing | 22 | person 22 |
+| `restricted-zone` | zone_entry | 32 | person + car |
+| `crosswalk-crossing` | line_crossing | 22 | person |
 | `zone-dwell` | dwell | 0 | — (no track dwelled ≥10 s in zone) |
 
-- **36 unique tracks** triggered at least one event.
-- Event frame range: 17–1733 (spans the full clip).
+- **54 unique events** with snapshot evidence (`evidence/cam-01/*.jpg`).
 - Event IDs follow ADR-5 format: `cam-01/s1/t{track}/{rule}/{kind}-{n}`.
+- Source timestamps use real PTS (B-013): e.g. frame 17 → 0.267 s.
+
+### Dwell-positive demo (`run-e2-dwell-demo.yaml`) — 2026-10-21
+
+Lowered dwell threshold to 1.5 s to demonstrate the dwell path with clip
+evidence on this crosswalk clip (objects pass through quickly; no track stays
+in the zone ≥10 s continuously).
+
+| Metric | Value |
+|---|---|
+| Frames | 1768 |
+| Detections | 16,529 |
+| Wall-clock | 17.02 s |
+| Events fired | **9** (all dwell) |
+| Evidence resolved | **9/9 (100%)** — MP4 clips, 2.9–5.4 MB each |
+
+Example event:
+
+```json
+{
+  "event_id": "cam-01/s1/t23/zone-dwell-short/dwell-0",
+  "rule_type": "dwell",
+  "source_time_s": 2.786,
+  "evidence": {"kind": "clip", "path": "evidence/cam-01/cam-01.s1.t23.zone-dwell-short.dwell-0.mp4"},
+  "payload": {"dwell_seconds": 1.5015, "dwell_start_s": 1.285}
+}
+```
+
+The clip is centered on the triggering frame (B-012): 1.5 s before and after.
 
 ### Config-only change verification
 
@@ -121,11 +151,11 @@ state is small relative to model weights.
    test uses the same clip with empty geometry — it validates the rule engine's
    silence, not the detector's absence of false positives on unseen scenes.
 
-3. **Dwell rule produced zero events.** No track remained in the restricted zone
-   for ≥10 continuous source seconds. This is expected for a busy crosswalk
-   (objects pass through quickly) but means the dwell path was exercised only by
-   unit tests, not by this clip. A dedicated slow-object clip would be needed to
-   validate dwell end-to-end.
+3. **Dwell at 10 s produced zero events on this clip.** No track remained in the
+   restricted zone for ≥10 continuous source seconds (objects pass through
+   quickly). The dwell path was validated with a 1.5 s threshold (9 events,
+   clip evidence resolved) and by unit tests. A dedicated slow-object clip would
+   be needed to validate the production 10 s threshold end-to-end.
 
 4. **Track fragmentation.** 267 unique tracks over 29.5 s suggests significant
    ID switching (a person walking through the frame may get multiple track IDs).
@@ -136,28 +166,28 @@ state is small relative to model weights.
 5. **Replay is not paced.** Same as E-1: wall-clock (22 s) < source duration
    (29.5 s). This is offline batch processing, not live streaming.
 
-6. **Evidence is not materialized by the measured runner.** The event records
-   have empty evidence locators and the result tree contains no snapshots or
-   clips. The runner processes an event before it places the trigger frame in
-   the evidence buffer; clip assembly is also pre-event rather than centred on
-   the incident. This is tracked as B-012, so E-2-T3 is not complete.
+6. **Evidence materialization (B-012, resolved 2026-10-21).** Snapshots and
+   centered clips are now written by the runner. The 2026-10-21 GPU run
+   confirms 54/54 snapshot events and 9/9 clip events resolve to files on disk.
 
-7. **Reruns are not isolated.** The event writer appends to an existing JSONL
-   file. Reusing an output directory can silently combine separate executions;
-   use a fresh result directory until B-012 is resolved.
+7. **Run isolation (B-012, resolved 2026-10-21).** A fresh run in an existing
+   output directory writes `events-1.jsonl`, `events-2.jsonl`, etc., so reruns
+   do not silently append to a previous event stream.
 
 ## Acceptance status
 
 | Criterion | Status |
 |---|---|
-| Line crossing fires on configured line | ✅ 22 events |
-| Zone entry fires on configured polygon | ✅ 58 events |
-| Dwell rule implemented and unit-tested | ⚠️ fixtures pass; no positive real-video event |
+| Line crossing fires on configured line | ✅ 22 events (2026-10-21 GPU) |
+| Zone entry fires on configured polygon | ✅ 32 events (2026-10-21 GPU) |
+| Dwell rule produces positive event with evidence | ✅ 9 events, clip evidence resolved (1.5 s threshold) |
 | Config-only change alters behaviour | ✅ 80→26 events, no code edits |
-| Negative clip produces zero events | ✅ 0 events |
+| Negative clip produces zero events | ✅ 0 events (2026-10-21 GPU) |
 | Track IDs populated and stable | ✅ 99.99% non-null, persistent across frames |
 | Event IDs follow ADR-5 format | ✅ `cam/session/track/rule/kind-n` |
-| Event evidence resolves to the incident | ❌ no evidence files in measured run; B-012 |
+| Event evidence resolves to the incident | ✅ 54/54 snapshots + 9/9 clips (B-012 resolved) |
+| Run isolation on rerun | ✅ `events-N.jsonl` numbering (B-012 resolved) |
+| Source PTS used for timestamps | ✅ real CAP_PROP_POS_MSEC (B-013 resolved) |
 | Reproducible commands recorded | ✅ above |
 | Annotated precision/recall baseline | ❌ deferred to B-003 |
 

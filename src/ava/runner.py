@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from .config import RunConfig
 from .detector import ConventionalDetector, Detector, PromptedDetector
-from .events import EventRecord, EventWriter, EvidenceStore
+from .events import EventRecord, EventWriter, EvidenceLocator, EvidenceStore
 from .ingest import iter_frames, probe
 from .output import AnnotatedVideoWriter, JsonlWriter
 from .rules import RuleEngine, RuleEvent
@@ -61,7 +61,13 @@ def _utc_now_iso() -> str:
 
 def _evidence_for(rule, event: RuleEvent, store: EvidenceStore,
                   frame_buffer: deque, fps: float):
-    """Materialize evidence for one event per the rule's evidence options."""
+    """Materialize evidence for one event per the rule's evidence options.
+
+    Snapshots are written immediately from the ring buffer. Clips are
+    deferred: the caller must call :func:`_flush_pending_clips` once enough
+    post-event frames have accumulated (or at end of stream) so the clip
+    window is centered on the triggering frame (ADR-5).
+    """
 
     opts = rule.evidence
     if not (opts.snapshot or opts.clip):
@@ -72,10 +78,55 @@ def _evidence_for(rule, event: RuleEvent, store: EvidenceStore,
             if idx == event.frame_index:
                 return store.save_snapshot(event.camera_id, event.event_id, bgr)
         return None
-    # Clip: bounded window ending at the triggering frame.
-    window = list(frame_buffer)[-round(fps * opts.clip_seconds):]
-    return store.save_clip(event.camera_id, event.event_id, window, fps,
-                           opts.clip_seconds)
+    # Clip is deferred; return a sentinel so the caller knows to buffer it.
+    return "DEFERRED_CLIP"
+
+
+def _flush_pending_clips(
+    pending: list[tuple[RuleEvent, object]],
+    store: EvidenceStore,
+    frame_buffer: deque,
+    fps: float,
+) -> list[EvidenceLocator]:
+    """Materialize deferred clips whose post-event window is now available.
+
+    A clip is flushed once the buffer contains frames up to at least
+    ``event.frame_index + clip_seconds/2 * fps`` (or the stream has ended).
+    The resulting window is centered on the triggering frame. Returns a list
+    of evidence locators for the flushed clips (in order).
+    """
+    still_pending: list[tuple[RuleEvent, object]] = []
+    flushed: list[EvidenceLocator] = []
+    for event, rule in pending:
+        opts = rule.evidence
+        half_frames = round(fps * opts.clip_seconds / 2) if fps > 0 else 0
+        target_index = event.frame_index + half_frames
+        # Check if the buffer extends far enough past the triggering frame.
+        buffer_max_idx = frame_buffer[-1][0] if frame_buffer else -1
+        if buffer_max_idx >= target_index or len(frame_buffer) < (frame_buffer.maxlen or 0):
+            # Build a centered window: half_frames before and after the event.
+            frames_list = list(frame_buffer)
+            # Find the triggering frame's position in the buffer.
+            try:
+                center_pos = next(
+                    i for i, (idx, _) in enumerate(frames_list)
+                    if idx == event.frame_index
+                )
+            except StopIteration:
+                # Triggering frame evicted from buffer; use what we have.
+                window = frames_list[-round(fps * opts.clip_seconds):]
+            else:
+                start = max(0, center_pos - half_frames)
+                end = min(len(frames_list), center_pos + half_frames + 1)
+                window = frames_list[start:end]
+            locator = store.save_clip(event.camera_id, event.event_id, window, fps,
+                                      opts.clip_seconds)
+            flushed.append(locator)
+        else:
+            still_pending.append((event, rule))
+    pending.clear()
+    pending.extend(still_pending)
+    return flushed
 
 
 def build_detector(config: RunConfig) -> Detector:
@@ -212,7 +263,17 @@ def _run_cameras(config: RunConfig) -> RunSummary:
     profiles_by_id = {p.id: p for p in config.profiles}
     model_ref = str(config.detector.model)
     store = EvidenceStore(config.output_dir)
-    event_writer = EventWriter(config.output_dir / "events.jsonl")
+
+    # Run isolation: a fresh run must not append to a previous run's events.
+    # If an events.jsonl already exists, start a new numbered file so reruns
+    # are isolated (ADR-5).
+    events_path = config.output_dir / "events.jsonl"
+    if events_path.exists():
+        counter = 1
+        while (config.output_dir / f"events-{counter}.jsonl").exists():
+            counter += 1
+        events_path = config.output_dir / f"events-{counter}.jsonl"
+    event_writer = EventWriter(events_path)
 
     on_gpu = detector.device == "cuda"
     timer = PhaseTimer(sync=on_gpu)
@@ -223,7 +284,7 @@ def _run_cameras(config: RunConfig) -> RunSummary:
     for cam in config.cameras:
         # One authoritative tracker/session per camera: clear any tracker state
         # left by the previous camera's clip so track IDs and Kalman state do
-        # not leak across streams (B-015). No-op for trackers that are already
+        # not leak across streams. No-op for trackers that are already
         # fresh or for detector paths without persistent tracking.
         detector.reset_tracker()
 
@@ -244,12 +305,18 @@ def _run_cameras(config: RunConfig) -> RunSummary:
         ) if (config.annotate and fps > 0) else None
 
         # Ring buffer of recent frames for evidence (snapshot/clip).
+        # Size it to hold a full centered clip window (2 * clip_seconds).
         max_clip_s = max(
             (r.evidence.clip_seconds for r in rules if r.evidence.clip),
             default=3.0,
         )
-        buf_len = max(1, round(fps * max_clip_s)) if fps > 0 else 30
+        buf_len = max(1, round(fps * 2 * max_clip_s)) if fps > 0 else 60
         frame_buffer: deque = deque(maxlen=buf_len)
+
+        # Deferred clips: (event, rule) pairs awaiting post-event frames.
+        pending_clips: list[tuple[RuleEvent, object]] = []
+        # Event records waiting for their clip evidence to be materialized.
+        pending_records: list[tuple[RuleEvent, object]] = []
 
         for frame in iter_frames(cam.source):
             timer.begin("decode")
@@ -271,18 +338,38 @@ def _run_cameras(config: RunConfig) -> RunSummary:
             # Rule evaluation (source-time based; discontinuities reset state).
             emitted_utc = _utc_now_iso()
             for event in engine.process_frame(result, emitted_utc):
-                evidence = _evidence_for(
-                    next(r for r in rules if r.id == event.rule_id),
-                    event, store, frame_buffer, fps,
-                )
-                record = EventRecord.from_rule_event(
-                    event,
-                    config_version=config.schema_version,
-                    model_ref=model_ref,
-                    evidence=evidence,
-                )
-                event_writer.write(record)
+                rule = next(r for r in rules if r.id == event.rule_id)
+                evidence = _evidence_for(rule, event, store, frame_buffer, fps)
+                if evidence == "DEFERRED_CLIP":
+                    # Defer both the clip and the event record until the
+                    # centered window is available.
+                    pending_clips.append((event, rule))
+                    pending_records.append((event, rule))
+                else:
+                    record = EventRecord.from_rule_event(
+                        event,
+                        config_version=config.schema_version,
+                        model_ref=model_ref,
+                        evidence=evidence,
+                    )
+                    event_writer.write(record)
                 summary.events += 1
+
+            # Flush any deferred clips whose post-event window is now ready.
+            if pending_clips:
+                flushed = _flush_pending_clips(
+                    pending_clips, store, frame_buffer, fps
+                )
+                # Write the corresponding event records with evidence.
+                for locator in flushed:
+                    ev, _rl = pending_records.pop(0)
+                    record = EventRecord.from_rule_event(
+                        ev,
+                        config_version=config.schema_version,
+                        model_ref=model_ref,
+                        evidence=locator,
+                    )
+                    event_writer.write(record)
 
             timer.begin("output")
             # The camera path always writes per-camera JSONL; only the
@@ -291,6 +378,22 @@ def _run_cameras(config: RunConfig) -> RunSummary:
             if video_writer:
                 video_writer.write(result, frame.bgr)
             timer.end("output")
+
+        # End of stream: flush any remaining deferred clips with whatever
+        # frames are available (the window may be shorter than requested).
+        if pending_clips:
+            flushed = _flush_pending_clips(
+                pending_clips, store, frame_buffer, fps
+            )
+            for locator in flushed:
+                ev, _rl = pending_records.pop(0)
+                record = EventRecord.from_rule_event(
+                    ev,
+                    config_version=config.schema_version,
+                    model_ref=model_ref,
+                    evidence=locator,
+                )
+                event_writer.write(record)
 
         jsonl_writer.close()
         summary.output_paths.append(str(jsonl_writer.path))

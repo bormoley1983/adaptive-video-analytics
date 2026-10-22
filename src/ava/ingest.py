@@ -23,8 +23,9 @@ class Frame:
 def iter_frames(source: Path):
     """Yield frames from a video file in decode order.
 
-    Timestamps are derived from the frame index and the container FPS so they
-    can be matched back to the source timeline.
+    Timestamps use the real source presentation timestamp (PTS) where the
+    container provides one (via ``CAP_PROP_POS_MSEC``); otherwise they fall
+    back to frame-index / FPS (ADR-4).
     """
     import cv2  # deferred: heavy import
 
@@ -35,10 +36,19 @@ def iter_frames(source: Path):
     index = 0
     try:
         while True:
+            # Capture the PTS of the frame about to be read. OpenCV's
+            # CAP_PROP_POS_MSEC reflects the position *before* the next read
+            # advances it, so we sample it here.
+            pos_msec = cap.get(cv2.CAP_PROP_POS_MSEC)
             ok, frame = cap.read()
             if not ok:
                 break
-            ts = (index / fps) if fps > 0 else float(index)
+            if pos_msec is not None and pos_msec > 0:
+                ts = pos_msec / 1000.0
+            elif fps > 0:
+                ts = index / fps
+            else:
+                ts = float(index)
             yield Frame(index=index, timestamp_s=ts, bgr=frame)
             index += 1
     finally:

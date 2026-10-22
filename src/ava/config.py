@@ -84,7 +84,8 @@ class PolygonGeometry(BaseModel):
 
     Entry is an outside->inside transition of the bottom-center anchor (ADR-4);
     a track first seen inside is occupancy, not observed entry. Requires at
-    least 3 distinct vertices, all inside the frame.
+    least 3 distinct vertices, all inside the frame, non-zero area and no
+    self-intersection.
     """
 
     points: list[tuple[float, float]] = Field(min_length=3)
@@ -104,6 +105,78 @@ class PolygonGeometry(BaseModel):
         if len(distinct) < 3:
             raise ValueError("polygon needs at least 3 distinct vertices")
         return points
+
+    @model_validator(mode="after")
+    def _non_degenerate_polygon(self) -> PolygonGeometry:
+        # Reject zero-area (collinear) polygons.
+        area = _polygon_area(self.points)
+        if abs(area) < 1e-12:
+            raise ValueError("polygon has zero area (vertices are collinear)")
+        # Reject self-intersecting polygons.
+        if _polygon_self_intersects(self.points):
+            raise ValueError("polygon edges intersect (self-intersecting polygon)")
+        return self
+
+
+def _polygon_area(points: list[tuple[float, float]]) -> float:
+    """Shoelace formula for signed area of a polygon."""
+    n = len(points)
+    area = 0.0
+    for i in range(n):
+        x1, y1 = points[i]
+        x2, y2 = points[(i + 1) % n]
+        area += x1 * y2 - x2 * y1
+    return area / 2.0
+
+
+def _segments_intersect(
+    p1: tuple[float, float], p2: tuple[float, float],
+    p3: tuple[float, float], p4: tuple[float, float],
+) -> bool:
+    """True if segment p1-p2 properly intersects segment p3-p4.
+
+    Uses the standard orientation test. Collinear overlapping segments are
+    also detected via on-segment checks.
+    """
+    def orient(a, b, c):
+        val = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
+        if abs(val) < 1e-12:
+            return 0
+        return 1 if val > 0 else 2
+
+    def on_segment(a, b, c):
+        # True if b lies on segment a-c (assuming collinear).
+        return (min(a[0], c[0]) - 1e-12 <= b[0] <= max(a[0], c[0]) + 1e-12 and
+                min(a[1], c[1]) - 1e-12 <= b[1] <= max(a[1], c[1]) + 1e-12)
+
+    o1 = orient(p1, p2, p3)
+    o2 = orient(p1, p2, p4)
+    o3 = orient(p3, p4, p1)
+    o4 = orient(p3, p4, p2)
+
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and on_segment(p1, p3, p2):
+        return True
+    if o2 == 0 and on_segment(p1, p4, p2):
+        return True
+    if o3 == 0 and on_segment(p3, p1, p4):
+        return True
+    return bool(o4 == 0 and on_segment(p3, p2, p4))
+
+
+def _polygon_self_intersects(points: list[tuple[float, float]]) -> bool:
+    """Check if any non-adjacent edges of the polygon intersect."""
+    n = len(points)
+    edges = [(points[i], points[(i + 1) % n]) for i in range(n)]
+    for i in range(n):
+        for j in range(i + 2, n):
+            # Skip adjacent edges (they share a vertex).
+            if i == 0 and j == n - 1:
+                continue
+            if _segments_intersect(edges[i][0], edges[i][1], edges[j][0], edges[j][1]):
+                return True
+    return False
 
 
 class ClassFilter(BaseModel):
@@ -270,18 +343,22 @@ class RunConfig(BaseModel):
         if self.cameras and self.detector is None:
             raise ValueError("camera runs require a `detector` section")
 
-        profile_ids = {p.id for p in self.profiles}
+        profile_ids = [p.id for p in self.profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            dupes = sorted({p for p in profile_ids if profile_ids.count(p) > 1})
+            raise ValueError(f"duplicate rule profile ids: {', '.join(dupes)}")
         camera_ids = [c.id for c in self.cameras]
         if len(camera_ids) != len(set(camera_ids)):
             dupes = sorted({c for c in camera_ids if camera_ids.count(c) > 1})
             raise ValueError(f"duplicate camera ids: {', '.join(dupes)}")
 
+        profile_id_set = set(profile_ids)
         for cam in self.cameras:
             for ref in cam.profiles:
-                if ref not in profile_ids:
+                if ref not in profile_id_set:
                     raise ValueError(
                         f"camera {cam.id!r} references unknown rule profile {ref!r}; "
-                        f"defined profiles: {sorted(profile_ids) or 'none'}"
+                        f"defined profiles: {sorted(profile_id_set) or 'none'}"
                     )
         return self
 

@@ -98,7 +98,7 @@ class ConventionalDetector(Detector):
         alive between calls. Without this reset, track IDs and Kalman state
         would leak from one camera's clip into the next in a multi-camera run.
         Calling it before each camera gives every stream its own authoritative
-        tracker/session (B-015). No-op until ``load()`` has built the model.
+        tracker/session. No-op until ``load()`` has built the model.
         """
         if self._model is None:
             return
