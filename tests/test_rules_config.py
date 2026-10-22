@@ -200,6 +200,46 @@ def test_unresolved_profile_reference_rejected() -> None:
         )
 
 
+def test_polygon_collinear_rejected() -> None:
+    """Three vertices on a straight line have zero area."""
+    with pytest.raises(ValidationError, match="zero area"):
+        PolygonGeometry(points=[(0.1, 0.5), (0.5, 0.5), (0.9, 0.5)])
+
+
+def test_polygon_self_intersecting_rejected() -> None:
+    """A polygon whose non-adjacent edges cross is rejected."""
+    # Pentagon where edge 0->1 crosses edge 2->3 at (0.5, 0.5).
+    with pytest.raises(ValidationError, match="self-intersecting"):
+        PolygonGeometry(points=[
+            (0.1, 0.1), (0.9, 0.9), (0.9, 0.1), (0.1, 0.9), (0.5, 0.5),
+        ])
+
+
+def test_polygon_valid_convex_accepted() -> None:
+    """A normal convex quadrilateral passes all checks."""
+    poly = PolygonGeometry(points=[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)])
+    assert len(poly.points) == 4
+
+
+def test_polygon_valid_concave_accepted() -> None:
+    """A concave (but non-self-intersecting) polygon is valid."""
+    poly = PolygonGeometry(points=[(0.1, 0.1), (0.9, 0.1), (0.5, 0.5), (0.9, 0.9), (0.1, 0.9)])
+    assert len(poly.points) == 5
+
+
+def test_duplicate_profile_ids_rejected() -> None:
+    """Two profiles with the same id in one run config are rejected."""
+    line = LineGeometry(start=(0.0, 0.5), end=(1.0, 0.5))
+    profile = RuleProfile(id="dup", rules=[LineCrossingRule(id="c", line=line)])
+    with pytest.raises(ValidationError, match="duplicate rule profile"):
+        RunConfig(
+            source=Path("v.mp4"),
+            detector=_detector(),
+            cameras=[_camera(["dup"])],
+            profiles=[profile, profile.model_copy(deep=True)],
+        )
+
+
 def test_camera_run_without_detector_rejected() -> None:
     with pytest.raises(ValidationError, match="require a `detector`"):
         RunConfig(cameras=[_camera()], profiles=[])

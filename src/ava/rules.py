@@ -229,10 +229,21 @@ class RuleEngine:
         return events
 
     def reset_session(self) -> None:
-        """Discontinuity starts a new session and resets all rule state (ADR-4)."""
+        """Discontinuity starts a new session and resets all rule state (ADR-4).
+
+        Allocates a new session identity so event IDs reflect the post-
+        discontinuity session.
+        """
         self._state.clear()
         self._occurrences.clear()
         self._session_discontinuous = True
+        # Increment the session counter: "s1" -> "s2", "s2" -> "s3", etc.
+        _, _, num = self.session_id.rpartition("s")
+        if num.isdigit():
+            self.session_id = f"s{int(num) + 1}"
+        else:
+            # Fallback for non-standard session IDs.
+            self.session_id = f"{self.session_id}-2"
 
     # -- internals ----------------------------------------------------------
 

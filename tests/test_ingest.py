@@ -18,7 +18,7 @@ class _FakeCap:
     """A stand-in for cv2.VideoCapture with canned frames and properties."""
 
     def __init__(self, opened=True, fps=10.0, width=64, height=48, count=3,
-                 n_frames=3):
+                 n_frames=3, pts_msec=None):
         self._opened = opened
         self._fps = fps
         self._width = width
@@ -26,6 +26,8 @@ class _FakeCap:
         self._count = count
         self._n = n_frames
         self._i = 0
+        # Optional per-frame PTS in milliseconds; None means unavailable.
+        self._pts_msec = pts_msec
         self.released = False
 
     def isOpened(self):
@@ -42,6 +44,10 @@ class _FakeCap:
             return self._height
         if prop == cv2.CAP_PROP_FRAME_COUNT:
             return self._count
+        if prop == cv2.CAP_PROP_POS_MSEC:
+            if self._pts_msec is not None and self._i < len(self._pts_msec):
+                return self._pts_msec[self._i]
+            return 0.0
         return 0.0
 
     def read(self):
@@ -131,3 +137,37 @@ def test_probe_unopenable_raises(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="cannot open video"):
         probe(src)
+
+
+# --- PTS-based timestamps ----------------------------------------------------
+
+
+def test_iter_frames_uses_source_pts_when_available(tmp_path, monkeypatch):
+    """When the container provides real PTS, timestamps use it (not index/fps)."""
+    src = tmp_path / "v.mp4"
+    # PTS values in ms: 0, 100, 250 (non-uniform, unlike index/fps would give)
+    cap = _FakeCap(fps=10.0, n_frames=3, pts_msec=[0.0, 100.0, 250.0])
+    _patch_cap(monkeypatch, cap)
+
+    frames = list(iter_frames(src))
+    assert [f.timestamp_s for f in frames] == pytest.approx([0.0, 0.1, 0.25])
+
+
+def test_iter_frames_falls_back_to_index_fps_when_pts_unavailable(tmp_path, monkeypatch):
+    """When PTS is unavailable (0.0), timestamps fall back to index/fps."""
+    src = tmp_path / "v.mp4"
+    cap = _FakeCap(fps=10.0, n_frames=3)  # pts_msec=None -> get returns 0.0
+    _patch_cap(monkeypatch, cap)
+
+    frames = list(iter_frames(src))
+    assert [f.timestamp_s for f in frames] == pytest.approx([0.0, 0.1, 0.2])
+
+
+def test_iter_frames_pts_zero_falls_back_to_index_fps(tmp_path, monkeypatch):
+    """A PTS of exactly 0.0 is treated as unavailable (fallback to index/fps)."""
+    src = tmp_path / "v.mp4"
+    cap = _FakeCap(fps=10.0, n_frames=2, pts_msec=[0.0, 0.0])
+    _patch_cap(monkeypatch, cap)
+
+    frames = list(iter_frames(src))
+    assert [f.timestamp_s for f in frames] == pytest.approx([0.0, 0.1])

@@ -12,18 +12,21 @@ license = { text = "Proprietary - internal PoC" }
 authors = [{ name = "AVA" }]
 
 # Conventional + prompted detection dependencies.
-# Versions are pinned after the compatibility run (ADR-1 current-stable policy).
+# Pinned to the exact measured stack from the tested ava/e1:local image (B-016).
+# The full transitive closure is captured in requirements.lock.txt; a clean
+# rebuild installs from that lock so the tested versions are reproduced exactly.
 dependencies = [
-    # Core inference. Revalidate exact mutually-compatible stable set at build time.
-    "ultralytics>=8.4.0",
-    "torch>=2.6,<3",
-    "torchvision>=0.21,<1",
-    "opencv-python-headless>=4.9",
-    # YOLOE text-prompting tokenizer dependency (ADR-3).
-    "clip @ git+https://github.com/ultralytics/CLIP.git@main",
+    # Core inference (measured on ai-host1, torch cu130 wheels).
+    "ultralytics==8.4.183",
+    "torch==2.14.1",
+    "torchvision==0.29.1",
+    "opencv-python-headless==5.0.0.93",
+    # YOLOE text-prompting tokenizer dependency (ADR-3), pinned to the exact
+    # commit that was tested rather than a moving @main ref.
+    "clip @ git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40",
     # Configuration and validation.
-    "pydantic>=2.7",
-    "PyYAML>=6.0",
+    "pydantic==2.14.1",
+    "PyYAML==6.0.3",
 ]
 
 [project.optional-dependencies]

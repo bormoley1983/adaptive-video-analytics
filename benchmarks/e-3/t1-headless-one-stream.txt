@@ -1,8 +1,13 @@
-# E-3-T1 headless one-stream compatibility validation.
-# Source: bundled sample_720p.mp4 (file source, looped). Display sink disabled so
-# the pipeline runs without X. nvinfer builds the engine from the ONNX at first
-# run (no prebuilt .engine shipped for this exact shape), which also validates
-# TensorRT engine build on GPU 0.
+# E-3-T1 historical deepstream-app diagnostic configuration.
+# This is not passing evidence: the attempted configuration below points
+# model-engine-file at an ONNX file, while DeepStream requires that property to
+# reference a serialized TensorRT engine. Preserve it to reproduce the
+# inconclusive 0 FPS attempt; correct the model contract before rerunning.
+#
+# Original intent: headless one-stream compatibility validation using the
+# bundled sample_720p.mp4 with display disabled. The invalid primary-GIE path is
+# retained below exactly as attempted and cannot substantiate an engine-build
+# or sample-application defect claim.
 [application]
 enable-perf-measurement=1
 perf-measurement-interval-sec=5
