@@ -59,6 +59,19 @@ Applies to every model and client.
 - Clean up only after integration or explicit abandonment and artifact recovery.
   Never force-remove another agent's work.
 
+## Task completion and integration
+
+- A task is not complete when its worker commit exists. It is complete only
+  after the branch is pushed, reviewed through a merge request, explicitly
+  approved by a human for merge, integrated into `develop`, and validated with
+  the combined `develop` state.
+- Agents must not merge their own work or infer merge approval from commit or
+  plan approval. Fast-forward, merge-commit, squash and rebase merges all require
+  explicit human confirmation immediately before updating `develop`.
+- After an approved merge, synchronize the `develop` worktree, run the affected
+  combined checks, and report the exact results. Remove the task worktree and
+  branch only after integration is verified and artifacts are recovered.
+
 ## Code and validation
 
 - Prefer precise names and small functions. Comment only non-obvious intent or
