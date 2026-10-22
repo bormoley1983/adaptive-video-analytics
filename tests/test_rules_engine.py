@@ -362,3 +362,49 @@ def test_deterministic_replay_same_events() -> None:
     b = run_engine(rules, frames)
     assert [(e.event_id, e.source_time_s) for e in a] == \
            [(e.event_id, e.source_time_s) for e in b]
+
+
+def test_discontinuity_allocates_new_session_id() -> None:
+    """A timestamp discontinuity increments the session identity."""
+    engine = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="s1")
+    assert engine.session_id == "s1"
+    f0 = frame(0, 0.0, [det(1, 0.2, 0.3)])
+    engine.process_frame(f0, emitted_utc="synthetic-0")
+    # Large jump triggers discontinuity inside process_frame.
+    f1 = frame(1, 100.0, [det(1, 0.2, 0.3)])
+    engine.process_frame(f1, emitted_utc="synthetic-1")
+    assert engine.session_id == "s2"
+
+
+def test_discontinuity_event_ids_use_new_session() -> None:
+    """Events after a discontinuity carry the new session in their ID."""
+    engine = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="s1")
+    # Pre-discontinuity crossing.
+    f0 = frame(0, 0.0, [det(1, 0.2, 0.3)])
+    f1 = frame(1, 0.1, [det(1, 0.8, 0.7)])
+    events_pre = engine.process_frame(f0, emitted_utc="synthetic-0")
+    events_pre += engine.process_frame(f1, emitted_utc="synthetic-1")
+    assert len(events_pre) == 1
+    assert "/s1/" in events_pre[0].event_id
+
+    # Discontinuity: large time jump.
+    f2 = frame(2, 100.0, [det(1, 0.2, 0.3)])
+    f3 = frame(3, 100.1, [det(1, 0.8, 0.7)])
+    engine.process_frame(f2, emitted_utc="synthetic-2")
+    events_post = engine.process_frame(f3, emitted_utc="synthetic-3")
+    assert len(events_post) == 1
+    assert "/s2/" in events_post[0].event_id
+    assert events_post[0].session_id == "s2"
+
+
+def test_multiple_discontinuities_increment_session() -> None:
+    """Each discontinuity increments the session counter."""
+    engine = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="s1")
+    engine.process_frame(frame(0, 0.0, [det(1, 0.2, 0.3)]), "synthetic-0")
+    assert engine.session_id == "s1"
+    # First discontinuity.
+    engine.process_frame(frame(1, 100.0, [det(1, 0.2, 0.3)]), "synthetic-1")
+    assert engine.session_id == "s2"
+    # Second discontinuity.
+    engine.process_frame(frame(2, 200.0, [det(1, 0.2, 0.3)]), "synthetic-2")
+    assert engine.session_id == "s3"
