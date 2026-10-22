@@ -1,0 +1,41 @@
+# Dwell-positive demo: lower threshold to demonstrate dwell event + clip evidence.
+# The crosswalk clip has people crossing through the zone; a 1.5s dwell threshold
+# will trigger for tracks that linger in the zone briefly.
+schema_version: "1"
+source: /videos/input.mp4
+gpu: "0"
+output_dir: /results/e2-dwell-demo
+jsonl: true
+annotate: false
+
+detector:
+  kind: conventional
+  model: /models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5
+
+cameras:
+  - id: cam-01
+    source: /videos/input.mp4
+    profiles: [dwell-demo]
+
+profiles:
+  - id: dwell-demo
+    description: Dwell-positive demo with clip evidence (B-012 validation)
+    rules:
+      # Dwell in the zone for more than 1.5 source seconds.
+      - id: zone-dwell-short
+        type: dwell
+        zone:
+          points:
+            - [0.55, 0.30]
+            - [0.95, 0.30]
+            - [0.95, 0.75]
+            - [0.55, 0.75]
+        classes:
+          include: [person]
+        dwell_seconds: 1.5
+        missing_track_grace_s: 2.0
+        evidence:
+          clip: true
+          clip_seconds: 3.0
