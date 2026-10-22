@@ -94,6 +94,13 @@ Applies to every model and client.
 - After an approved merge, synchronize the `develop` worktree, run the affected
   combined checks, and report the exact results. Remove the task worktree and
   branch only after integration is verified and artifacts are recovered.
+- Post-merge cleanup: once a branch is merged into `develop`, confirm its tip is
+  an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`)
+  and that its worktree has no uncommitted changes, then remove the worktree
+  (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`),
+  and delete the remote branch (`git push origin --delete <branch>`). Use safe
+  `-d` deletes only; never force-remove a branch that is not fully merged. Prune
+  stale remote-tracking refs with `git fetch origin --prune`.
 
 ## Code and validation
 
