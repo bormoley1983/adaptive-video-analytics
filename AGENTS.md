@@ -8,7 +8,26 @@ Applies to every model and client.
 2. If `docs/` exists, read `docs/intro.md`, the active plan, applicable ADRs,
    `docs/tests_rules.md` and latest progress entry.
 3. State one smallest observable outcome and its file scope. Verify assumptions.
-4. Preserve unrelated work. Do not reformat, rename or overwrite active files.
+4. Hold a QA session with a human to surface and resolve every missing detail,
+   decision, assumption and acceptance criterion. Record the answers and revise
+   the plan; explicitly unresolved details are blockers, not agent defaults.
+5. Present the resulting plan and wait for explicit human confirmation before
+   editing files or taking implementation actions. The original task request is
+   not plan confirmation, and an agent cannot provide or infer this approval.
+6. Preserve unrelated work. Do not reformat, rename or overwrite active files.
+
+## Mandatory human gates
+
+- The plan-confirmation gate above applies to every task, including delegated
+  and parallel work. If scope or assumptions materially change, repeat the QA
+  and obtain confirmation of the revised plan before continuing.
+- Never create, amend, merge, squash, cherry-pick or otherwise write a Git
+  commit without a human approving that exact commit after reviewing its diff,
+  validation results and proposed commit message. Approval is single-use; any
+  material diff or message change requires fresh approval.
+- Human gates are non-delegable. Silence, prior approvals, task instructions,
+  test success and another agent's approval do not satisfy them. Agents stop at
+  the gate and leave reviewable uncommitted changes when approval is absent.
 
 ## Boundaries
 
@@ -29,7 +48,9 @@ Applies to every model and client.
 - Create it from an explicit committed base. Other worktrees' uncommitted changes
   are not inherited.
 - Assign each worker an outcome and owned files. Coordinate before scopes overlap.
-- Workers make focused commits. The integrator reviews, merges or cherry-picks,
+- Workers prepare focused, reviewable changes and validation evidence. After
+  the mandatory human commit approval, they may commit. The integrator obtains
+  the same approval before any merge or cherry-pick that writes a commit, then
   resolves overlaps and runs combined validation.
 - Ignored assets are not copied. Share `docs/`, `videos/` and `models/` read-only
   only when needed; keep `results/` local; never copy credentials.
