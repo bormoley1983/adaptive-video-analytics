@@ -27,6 +27,8 @@ dependencies = [
     # Configuration and validation.
     "pydantic==2.14.1",
     "PyYAML==6.0.3",
+    # Prometheus scrape surface for live runs (B-021); stdlib http.server host.
+    "prometheus_client==0.26.0",
 ]
 
 [project.optional-dependencies]
