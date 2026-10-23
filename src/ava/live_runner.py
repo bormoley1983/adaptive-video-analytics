@@ -29,6 +29,7 @@ from .config import CONFIG_SCHEMA_VERSION, DetectorConfig, LiveRunConfig
 from .detector import Detector
 from .events import EventRecord, EventWriter, EvidenceLocator
 from .live_ingest import LiveSourceConfig, iter_live_frames
+from .live_metrics import CameraMetrics, LiveMetricsCollector
 from .rules import RuleEngine
 
 
@@ -99,6 +100,8 @@ class _CameraWorker:
         event_writer: EventWriter,
         buffer_size: int,
         model_ref: str | None,
+        metrics: CameraMetrics | None = None,
+        slow_sink_s: float = 0.0,
     ) -> None:
         self.cam = cam_config
         self.source_config = source_config
@@ -108,8 +111,10 @@ class _CameraWorker:
         self.event_writer = event_writer
         self.buffer_size = buffer_size
         self.model_ref = model_ref
+        self.slow_sink_s = slow_sink_s
 
         self.stats = CameraStats(camera_id=cam_config.id)
+        self.metrics = metrics or CameraMetrics(camera_id=cam_config.id)
         self._stop_event = threading.Event()
         self._frame_buffer: deque = deque(maxlen=buffer_size)
         # Inference pacing (source-time based, ADR-4).
@@ -134,10 +139,12 @@ class _CameraWorker:
                     break
 
                 self.stats.frames_decoded += 1
+                self.metrics.record_decode()
 
                 # Bounded buffer: push frame, count drops.
                 if len(self._frame_buffer) == self._frame_buffer.maxlen:
                     self.stats.frames_dropped += 1
+                    self.metrics.record_drop_buffer()
                 self._frame_buffer.append((frame.index, frame.bgr))
 
                 # Decimate to analysis_fps using source timestamp (ADR-4:
@@ -149,7 +156,8 @@ class _CameraWorker:
                         continue
                 self._last_infer_ts = frame.timestamp_s
 
-                # Inference (shared lock or dedicated).
+                # Inference (shared lock or dedicated) with timing.
+                infer_start = time.perf_counter()
                 if self.detector_lock is not None:
                     with self.detector_lock:
                         result = self.detector.detect(
@@ -159,8 +167,10 @@ class _CameraWorker:
                     result = self.detector.detect(
                         frame.index, frame.timestamp_s, frame.bgr
                     )
+                infer_duration = time.perf_counter() - infer_start
 
                 self.stats.frames_inferred += 1
+                self.metrics.record_inference(infer_duration)
 
                 # Rule engine.
                 emitted_utc = _utc_now_iso()
@@ -174,14 +184,19 @@ class _CameraWorker:
                         capture_utc=frame.capture_utc,
                         time_basis=frame.time_basis,
                     )
+                    if self.slow_sink_s > 0:
+                        time.sleep(self.slow_sink_s)
                     self.event_writer.write(record)
                     self.stats.events_emitted += 1
+                    # Event latency: wall-clock from frame decode to emission.
+                    # (Source PTS is not directly comparable to wall-clock;
+                    # this measures processing pipeline latency.)
+                    self.metrics.record_event(infer_duration)
 
         except Exception as exc:  # noqa: BLE001 - worker must not crash the run
             self.stats.errors.append(f"{type(exc).__name__}: {exc}")
+            self.metrics.record_error(f"{type(exc).__name__}: {exc}")
         finally:
-            # Track reconnects from the source (best-effort; the iterator
-            # manages its own state internally).
             pass
 
 
@@ -256,22 +271,51 @@ def run_live(
             event_writer=event_writer,
             buffer_size=live_config.buffer_size,
             model_ref=model_ref,
+            slow_sink_s=live_config.slow_sink_s,
         )
         workers.append(worker)
         t = threading.Thread(target=worker.run, name=f"ava-live-{cam.id}", daemon=True)
         threads.append(t)
 
+    # Metrics collector (E-3-T4).
+    collector = LiveMetricsCollector(
+        gpu_index=gpu or "0",
+        sample_interval_s=live_config.metrics_interval_s,
+    )
+    for cam in live_config.cameras:
+        collector.register_camera(cam.id)
+    # Wire per-camera metrics into workers.
+    for i, worker in enumerate(workers):
+        worker.metrics = collector.get_camera(live_config.cameras[i].id)  # type: ignore[assignment]
+
+    # Background host/GPU sampler thread.
+    sampler_stop = threading.Event()
+
+    def _sampler_loop() -> None:
+        while not sampler_stop.is_set():
+            collector.sample_host()
+            sampler_stop.wait(collector.sample_interval_s)
+
+    sampler_thread = threading.Thread(target=_sampler_loop, daemon=True)
+
     # Start all cameras.
     start = time.perf_counter()
     for t in threads:
         t.start()
+    sampler_thread.start()
 
     # Wait for all workers to finish (reconnect budget exhausted or stopped).
     for t in threads:
         t.join()
 
+    sampler_stop.set()
+    sampler_thread.join(timeout=2.0)
+
     wall = time.perf_counter() - start
     event_writer.close()
+
+    # Write metrics.
+    metrics_path = collector.write(output_dir / "metrics.json")
 
     summary = LiveRunSummary(
         detector_mode=live_config.detector_mode,
@@ -279,7 +323,7 @@ def run_live(
         cameras=[w.stats for w in workers],
         wall_seconds=wall,
         total_events=sum(w.stats.events_emitted for w in workers),
-        output_paths=[str(events_path)],
+        output_paths=[str(events_path), str(metrics_path)],
     )
     return summary
 
