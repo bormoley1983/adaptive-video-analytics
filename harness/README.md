@@ -9,11 +9,14 @@ stable RTSP path (ADR-2).
 ## Topology
 
 ```
-cam-01 (FFmpeg) ──┐
-cam-02 (FFmpeg) ──┤──► MediaMTX :8554 (127.0.0.1 only) ──► probe / analytics
-cam-03 (FFmpeg) ──┤
-cam-04 (FFmpeg) ──┘
+ava-cam-01 (FFmpeg) ──┐
+ava-cam-02 (FFmpeg) ──┤──► ava-mediamtx :8554 (127.0.0.1 only) ──► probe / analytics
+ava-cam-03 (FFmpeg) ──┤
+ava-cam-04 (FFmpeg) ──┘
 ```
+
+All containers carry the `ava-` prefix so the whole AVA stack (analytics +
+harness) is manageable as one group.
 
 - **No GPU** is allocated to the replay stack.
 - **Local bind only**: RTSP is exposed on `127.0.0.1:8554`.
@@ -52,7 +55,7 @@ Verifies each of the 4 RTSP paths is independently probeable, H.264 720p,
 ### Restart a single publisher (reconnect test)
 
 ```bash
-docker compose -f harness/docker-compose.yml restart cam-02
+docker compose -f harness/docker-compose.yml restart ava-cam-02
 # wait ~5 s, then re-probe:
 ./harness/probe.sh
 ```
@@ -63,7 +66,7 @@ re-establishes its RTSP session automatically.
 ### Restart MediaMTX (server recovery test)
 
 ```bash
-docker compose -f harness/docker-compose.yml restart mediamtx
+docker compose -f harness/docker-compose.yml restart ava-mediamtx
 # wait ~10 s for publishers to reconnect, then re-probe:
 ./harness/probe.sh
 ```
@@ -113,7 +116,7 @@ the generator bottleneck when downstream capacity is measured.
 
 ```
 ffmpeg -re -stream_loop -1 -i /footage/normalized/cam-NN.mp4 \
-       -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp rtsp://mediamtx:8554/cam-NN
+       -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp rtsp://ava-mediamtx:8554/cam-NN
 ```
 
 Transport is TCP (set in both `docker-compose.yml` and `mediamtx.yml`). With

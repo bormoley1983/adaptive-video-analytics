@@ -313,6 +313,19 @@ class CameraConfig(BaseModel):
         return _validate_id(value, "camera id")
 
 
+class TelemetryConfig(BaseModel):
+    """Optional telemetry surface for a live run (B-021).
+
+    Structured JSON logs on stdout are always on; the Prometheus scrape
+    endpoint is opt-in so runtime progress never depends on a collector.
+    """
+
+    # Bind a local /metrics endpoint when set (loopback only by default).
+    prometheus_port: int | None = Field(None, ge=1, le=65535)
+    # Minimum severity emitted to stdout: debug < info < warning < error.
+    log_level: Literal["debug", "info", "warning", "error"] = "info"
+
+
 class LiveCameraConfig(BaseModel):
     """One live RTSP camera and the rule profiles applied to it."""
 
@@ -357,6 +370,8 @@ class LiveRunConfig(BaseModel):
     slow_sink_s: float = Field(0.0, ge=0.0)
     # Metrics sampling interval in seconds for host/GPU resource polling.
     metrics_interval_s: float = Field(5.0, gt=0.0)
+    # Optional structured-log / Prometheus surface (B-021).
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     # Live cameras.
     cameras: list[LiveCameraConfig] = Field(default_factory=list)
     # Rule profiles (shared with file-based runs).

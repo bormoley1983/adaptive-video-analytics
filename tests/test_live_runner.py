@@ -567,3 +567,79 @@ class TestOverloadScenarios:
         cam = summary.cameras[0]
         assert cam.frames_decoded == 100
         assert cam.frames_dropped == 90
+
+
+class TestStructuredLogs:
+    """B-021: structured JSON stdout logs with correlation fields and redaction."""
+
+    def _run(self, tmp_path, monkeypatch, capsys, **cfg_kwargs):
+        import json
+
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=5, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1, **cfg_kwargs)
+        det_config = _make_detector_config(tmp_path)
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+        return summary, lines
+
+    def test_start_and_end_logs_carry_run_id(self, tmp_path, monkeypatch, capsys):
+        _, lines = self._run(tmp_path, monkeypatch, capsys)
+        start = next(l for l in lines if l["component"] == "live_run.start")
+        end = next(l for l in lines if l["component"] == "live_run.end")
+        assert start["run_id"] == end["run_id"]
+        assert start["worker_id"] == "ava-live-1"
+        assert start["schema_version"] == "1"
+
+    def test_camera_done_log_carries_camera_correlation(self, tmp_path, monkeypatch, capsys):
+        _, lines = self._run(tmp_path, monkeypatch, capsys)
+        done = next(l for l in lines if l["component"] == "live_run.camera_done")
+        assert done["camera_id"] == "cam-01"
+        assert done["frames_decoded"] == 5
+
+    def test_no_raw_rtsp_url_in_any_log_line(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        _, lines = self._run(tmp_path, monkeypatch, capsys)
+        for line in lines:
+            rendered = json.dumps(line)
+            assert "rtsp://" not in rendered, f"raw RTSP URL leaked: {rendered}"
+
+    def test_metrics_available_without_collector(self, tmp_path, monkeypatch, capsys):
+        """Prometheus scrape surface works with no external collector running."""
+        import socket
+
+        import ava.live_runner as lr
+        from ava.telemetry import render_metrics
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=5, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        live_config = _make_live_config(n_cameras=1)
+        live_config.telemetry.prometheus_port = port
+        det_config = _make_detector_config(tmp_path)
+
+        run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        # The scrape surface rendered metrics for the run (no collector needed).
+        text = render_metrics()
+        assert "ava_frames_decoded_total" in text
+        assert 'camera="cam-01"' in text

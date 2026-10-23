@@ -31,6 +31,7 @@ from .events import EventRecord, EventWriter, EvidenceLocator
 from .live_ingest import LiveSourceConfig, iter_live_frames
 from .live_metrics import CameraMetrics, LiveMetricsCollector
 from .rules import RuleEngine
+from .telemetry import Telemetry, new_run_context, serve_metrics
 
 
 def _utc_now_iso() -> str:
@@ -102,6 +103,7 @@ class _CameraWorker:
         model_ref: str | None,
         metrics: CameraMetrics | None = None,
         slow_sink_s: float = 0.0,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self.cam = cam_config
         self.source_config = source_config
@@ -112,6 +114,7 @@ class _CameraWorker:
         self.buffer_size = buffer_size
         self.model_ref = model_ref
         self.slow_sink_s = slow_sink_s
+        self.telemetry = telemetry
 
         self.stats = CameraStats(camera_id=cam_config.id)
         self.metrics = metrics or CameraMetrics(camera_id=cam_config.id)
@@ -140,11 +143,15 @@ class _CameraWorker:
 
                 self.stats.frames_decoded += 1
                 self.metrics.record_decode()
+                if self.telemetry is not None:
+                    self.telemetry.record_decode(self.cam.id)
 
                 # Bounded buffer: push frame, count drops.
                 if len(self._frame_buffer) == self._frame_buffer.maxlen:
                     self.stats.frames_dropped += 1
                     self.metrics.record_drop_buffer()
+                    if self.telemetry is not None:
+                        self.telemetry.record_drop(self.cam.id, "buffer_full")
                 self._frame_buffer.append((frame.index, frame.bgr))
 
                 # Decimate to analysis_fps using source timestamp (ADR-4:
@@ -171,6 +178,8 @@ class _CameraWorker:
 
                 self.stats.frames_inferred += 1
                 self.metrics.record_inference(infer_duration)
+                if self.telemetry is not None:
+                    self.telemetry.record_inference(self.cam.id, infer_duration)
 
                 # Rule engine.
                 emitted_utc = _utc_now_iso()
@@ -192,10 +201,14 @@ class _CameraWorker:
                     # (Source PTS is not directly comparable to wall-clock;
                     # this measures processing pipeline latency.)
                     self.metrics.record_event(infer_duration)
+                    if self.telemetry is not None:
+                        self.telemetry.record_event(self.cam.id, infer_duration)
 
         except Exception as exc:  # noqa: BLE001 - worker must not crash the run
             self.stats.errors.append(f"{type(exc).__name__}: {exc}")
             self.metrics.record_error(f"{type(exc).__name__}: {exc}")
+            if self.telemetry is not None:
+                self.telemetry.record_error(self.cam.id, "other")
         finally:
             pass
 
@@ -284,16 +297,57 @@ def run_live(
     )
     for cam in live_config.cameras:
         collector.register_camera(cam.id)
+
+    # Structured telemetry (B-021): correlation context + bounded Prometheus
+    # metrics. The scrape endpoint is optional and loopback-only.
+    run_ctx = new_run_context(
+        camera_ids=[cam.id for cam in live_config.cameras],
+        config_schema_version=CONFIG_SCHEMA_VERSION,
+    )
+    telemetry = Telemetry(
+        context=run_ctx,
+        detector_mode=live_config.detector_mode,
+        backend=live_config.backend,
+    )
+    metrics_thread = None
+    if live_config.telemetry.prometheus_port is not None:
+        metrics_thread = serve_metrics(live_config.telemetry.prometheus_port)
+
     # Wire per-camera metrics into workers.
     for i, worker in enumerate(workers):
-        worker.metrics = collector.get_camera(live_config.cameras[i].id)  # type: ignore[assignment]
+        cam_id = live_config.cameras[i].id
+        worker.metrics = collector.get_camera(cam_id)  # type: ignore[assignment]
+        worker.telemetry = telemetry
 
-    # Background host/GPU sampler thread.
+    run_ctx.log(
+        "live_run.start",
+        "info",
+        "live run starting",
+        cameras=len(live_config.cameras),
+        detector_mode=live_config.detector_mode,
+        backend=live_config.backend,
+        prometheus_port=live_config.telemetry.prometheus_port,
+    )
+
+    # Background host/GPU sampler thread; also samples bounded queue state so
+    # depth/age appear in both metrics.json and the Prometheus gauges.
     sampler_stop = threading.Event()
 
     def _sampler_loop() -> None:
         while not sampler_stop.is_set():
             collector.sample_host()
+            for worker in workers:
+                cam_id = worker.cam.id
+                depth = len(worker._frame_buffer)
+                age_s = 0.0
+                if depth:
+                    # Approximate age from the buffer's frame spacing; the
+                    # sampler only needs a bounded, monotonic signal.
+                    age_s = min(depth / max(worker.cam.analysis_fps, 1e-6), 60.0)
+                cm = collector.get_camera(cam_id)
+                if cm is not None:
+                    cm.sample_queue(depth, age_s)
+                telemetry.sample_queue(cam_id, depth, age_s)
             sampler_stop.wait(collector.sample_interval_s)
 
     sampler_thread = threading.Thread(target=_sampler_loop, daemon=True)
@@ -303,6 +357,7 @@ def run_live(
     for t in threads:
         t.start()
     sampler_thread.start()
+    telemetry.mark_run_started()
 
     # Wait for all workers to finish (reconnect budget exhausted or stopped).
     for t in threads:
@@ -316,6 +371,32 @@ def run_live(
 
     # Write metrics.
     metrics_path = collector.write(output_dir / "metrics.json")
+
+    for worker in workers:
+        run_ctx.log(
+            "live_run.camera_done",
+            "info" if not worker.stats.errors else "warning",
+            "camera finished",
+            camera_id=worker.cam.id,
+            frames_decoded=worker.stats.frames_decoded,
+            frames_inferred=worker.stats.frames_inferred,
+            frames_dropped=worker.stats.frames_dropped,
+            events_emitted=worker.stats.events_emitted,
+            reconnects=worker.stats.reconnects,
+            errors=len(worker.stats.errors),
+        )
+    run_ctx.log(
+        "live_run.end",
+        "info",
+        "live run finished",
+        wall_seconds=round(wall, 3),
+        total_events=sum(w.stats.events_emitted for w in workers),
+    )
+
+    if metrics_thread is not None:
+        # Daemon thread; nothing to join. The server socket closes with the
+        # process. Kept explicit so a future non-daemon design stays correct.
+        pass
 
     summary = LiveRunSummary(
         detector_mode=live_config.detector_mode,

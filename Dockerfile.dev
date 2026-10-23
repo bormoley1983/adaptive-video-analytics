@@ -7,7 +7,10 @@
 # inference runtime (B-018).
 FROM ava/e1:local
 
-RUN /opt/venv/bin/pip install --no-cache-dir pytest pytest-cov ruff
+# prometheus_client backs the live-run scrape surface (B-021); it is a runtime
+# dependency of the package, not just a dev tool.
+RUN /opt/venv/bin/pip install --no-cache-dir pytest pytest-cov ruff \
+    "prometheus_client==0.26.0"
 
 # Gates invoke python directly (pytest, ruff), not the `ava` CLI entrypoint.
 ENTRYPOINT ["python"]
