@@ -1,0 +1,87 @@
+# AVA RTSP replay harness (E-3-T2 / B-019).
+#
+# Standalone CPU-only Compose project (ADR-2): one MediaMTX server plus one
+# independent FFmpeg publisher per emulated camera. Publishers loop pre-
+# normalized clips (H.264 720p @ 10 FPS, produced by ./harness/normalize.sh)
+# with -c copy (no re-encode), keeping generator CPU near zero. No GPU is
+# allocated; the replay stack reports its resource use separately from the
+# analytics worker so source generation cannot inflate or hide capacity results.
+#
+# Images are pinned by digest for reproducibility (B-019). To re-pin after an
+# upstream update, pull the new image and replace the @sha256: reference.
+#
+#   ./harness/normalize.sh          # one-time: produce videos/normalized/*.mp4
+#   docker compose -f harness/docker-compose.yml up -d
+#   ./harness/probe.sh
+#
+name: ava-harness
+
+x-publisher: &publisher-defaults
+  image: jrottenberg/ffmpeg@sha256:7e8154ec4779d335054de5e173f1ef52032abaa12ac7416cc7f0c88f4973bd14
+  restart: on-failure
+  # CPU-only: no GPU reservation.
+  environment:
+    - CAM_ID=${CAM_ID}
+    - RTSP_PATH=${RTSP_PATH}
+  volumes:
+    # Footage is read-only (ADR-7). Each publisher mounts only its own clip.
+    - ../videos:/footage:ro
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx@sha256:c7540465f868a02652118bea5a0daab12a29ac0f6cb8485abd535939ecddf886
+    restart: on-failure
+    volumes:
+      - ./mediamtx.yml:/mediaserver.yml:ro
+    command: ["/mediaserver.yml"]
+    ports:
+      # Local bind only (ADR-2): probe from the host via 127.0.0.1.
+      - "127.0.0.1:8554:8554"
+
+  cam-01:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-01
+      - RTSP_PATH=/cam-01
+      - SOURCE_FILE=normalized/cam-01.mp4
+    # The jrottenberg/ffmpeg image entrypoint is ffmpeg itself, so the command
+    # is passed straight to it (no shell). -re paces input at native stream rate
+    # (without it FFmpeg reads as fast as possible and saturates CPU); -stream_loop
+    # -1 loops the clip.
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-01.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://mediamtx:8554/cam-01
+
+  cam-02:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-02
+      - RTSP_PATH=/cam-02
+      - SOURCE_FILE=normalized/cam-02.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-02.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://mediamtx:8554/cam-02
+
+  cam-03:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-03
+      - RTSP_PATH=/cam-03
+      - SOURCE_FILE=normalized/cam-03.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-03.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://mediamtx:8554/cam-03
+
+  cam-04:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-04
+      - RTSP_PATH=/cam-04
+      - SOURCE_FILE=normalized/cam-04.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-04.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://mediamtx:8554/cam-04
