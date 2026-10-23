@@ -69,6 +69,36 @@ Applies to every model and client.
   inspect a portion, do it as a separate step against the saved log file rather
   than discarding lines at the source.
 
+### Loop recovery protocol
+
+When the dead-loop guard triggers (identical call repeated, or two distinct
+approaches yield no new information), the agent MUST:
+
+1. **Stop and report.** State in plain text: what was called, how many times,
+   what was returned each time, and why the result is unchanged. Do not issue
+   another tool call in the same turn as the report.
+
+2. **Diagnose the cause.** Classify the stall into exactly one of:
+   - *Environment*: the target state changed externally (file edited, process
+     restarted, network flap). Action: re-read the current state with a
+     different query or path before retrying.
+   - *Query mismatch*: the parameters are correct but the tool's scope doesn't
+     cover the target (wrong directory, wrong pattern, wrong line range).
+     Action: broaden or narrow one parameter and retry once.
+   - *Genuine absence*: the thing being searched for does not exist. Action:
+     state the conclusion explicitly ("X is not present in Y") and move on to
+     the next subtask. Do not retry.
+
+3. **State-change assertion.** Before issuing any tool call that targets the
+   same goal as the stalled sequence, the agent must name the specific
+   parameter or precondition that has changed since the last attempt. If no
+   such change exists, the call is prohibited.
+
+4. **Escalation cap.** If recovery step 2 yields a retry and that retry also
+   returns an unchanged result, the agent stops probing entirely, reports the
+   full sequence (calls, results, diagnosis) to the user, and waits for
+   direction. Three total attempts at the same goal is the hard maximum.
+
 ## Parallel work
 
 - Use one sibling worktree and branch per task:
