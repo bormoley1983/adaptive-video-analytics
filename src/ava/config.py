@@ -353,6 +353,10 @@ class LiveRunConfig(BaseModel):
     reconnect_max: int = Field(3, ge=0)
     # Base delay in seconds for exponential backoff on reconnect.
     reconnect_delay_s: float = Field(1.0, gt=0.0)
+    # Artificial per-event sink delay in seconds (overload testing only).
+    slow_sink_s: float = Field(0.0, ge=0.0)
+    # Metrics sampling interval in seconds for host/GPU resource polling.
+    metrics_interval_s: float = Field(5.0, gt=0.0)
     # Live cameras.
     cameras: list[LiveCameraConfig] = Field(default_factory=list)
     # Rule profiles (shared with file-based runs).

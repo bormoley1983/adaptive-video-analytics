@@ -408,3 +408,162 @@ class TestLiveConfigValidation:
         assert len(cfg.cameras) == 2
         assert cfg.backend == "opencv"
         assert cfg.detector_mode == "shared"
+
+    def test_slow_sink_default_zero(self):
+        cfg = _make_live_config(n_cameras=1)
+        assert cfg.slow_sink_s == 0.0
+
+    def test_metrics_interval_default(self):
+        cfg = _make_live_config(n_cameras=1)
+        assert cfg.metrics_interval_s == 5.0
+
+
+class TestMetricsIntegration:
+    """Verify that run_live produces metrics.json with expected structure."""
+
+    def test_metrics_file_created(self, tmp_path, monkeypatch):
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=10, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1)
+        det_config = _make_detector_config(tmp_path)
+        out_dir = tmp_path / "results"
+
+        summary = run_live(live_config, det_config, out_dir, gpu=None)
+
+        # metrics.json should be in output_paths.
+        metrics_files = [p for p in summary.output_paths if p.endswith("metrics.json")]
+        assert len(metrics_files) == 1
+        metrics_path = Path(metrics_files[0])
+        assert metrics_path.exists()
+
+        import json
+
+        with metrics_path.open() as f:
+            data = json.load(f)
+        assert "cameras" in data
+        assert len(data["cameras"]) == 1
+        cam_data = data["cameras"][0]
+        assert cam_data["camera_id"] == "cam-01"
+        assert cam_data["frames_decoded"] == 10
+        assert cam_data["frames_inferred"] > 0
+        assert "inference_timing" in cam_data
+        assert "event_latency" in cam_data
+
+    def test_metrics_record_drops(self, tmp_path, monkeypatch):
+        """Buffer drops are recorded in metrics."""
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=20, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1, buffer_size=5)
+        det_config = _make_detector_config(tmp_path)
+        out_dir = tmp_path / "results"
+
+        summary = run_live(live_config, det_config, out_dir, gpu=None)
+
+        import json
+
+        metrics_path = Path(next(p for p in summary.output_paths if p.endswith("metrics.json")))
+        with metrics_path.open() as f:
+            data = json.load(f)
+        cam_data = data["cameras"][0]
+        assert cam_data["frames_dropped"]["buffer_full"] == 15
+
+
+class TestOverloadScenarios:
+    """Simulate overload conditions and verify bounded behavior."""
+
+    def test_slow_sink_does_not_crash(self, tmp_path, monkeypatch):
+        """A slow sink adds latency but does not crash the worker."""
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=5, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        # Use a very small slow_sink to keep the test fast.
+        live_config = _make_live_config(n_cameras=1, slow_sink_s=0.01)
+        det_config = _make_detector_config(tmp_path)
+        out_dir = tmp_path / "results"
+
+        summary = run_live(live_config, det_config, out_dir, gpu=None)
+
+        # No errors recorded.
+        for cam in summary.cameras:
+            assert cam.errors == []
+
+    def test_camera_disconnect_surviving_streams_continue(self, tmp_path, monkeypatch):
+        """When one camera's source ends, the other continues processing."""
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        # cam-01 gets 10 frames, cam-02 gets only 3 (simulates early disconnect).
+        sources = {
+            "cam-01": FakeSource(n_frames=10, fps=10.0),
+            "cam-02": FakeSource(n_frames=3, fps=10.0),
+        }
+
+        def fake_iter(cfg: LiveSourceConfig):
+            for key, src in sources.items():
+                if key in cfg.url:
+                    return src(cfg)
+            return iter(())
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=2)
+        det_config = _make_detector_config(tmp_path)
+        out_dir = tmp_path / "results"
+
+        summary = run_live(live_config, det_config, out_dir, gpu=None)
+
+        # Both cameras processed their available frames.
+        cam_stats = {c.camera_id: c for c in summary.cameras}
+        assert cam_stats["cam-01"].frames_decoded == 10
+        assert cam_stats["cam-02"].frames_decoded == 3
+        # No errors on either (clean stream end is not an error).
+        assert cam_stats["cam-01"].errors == []
+        assert cam_stats["cam-02"].errors == []
+
+    def test_buffer_bounded_under_overload(self, tmp_path, monkeypatch):
+        """Frame buffer never exceeds its configured size."""
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=100, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1, buffer_size=10)
+        det_config = _make_detector_config(tmp_path)
+        out_dir = tmp_path / "results"
+
+        summary = run_live(live_config, det_config, out_dir, gpu=None)
+
+        # 100 frames decoded, buffer holds 10, so 90 drops.
+        cam = summary.cameras[0]
+        assert cam.frames_decoded == 100
+        assert cam.frames_dropped == 90
