@@ -1,0 +1,253 @@
+{
+    "title": "AVA Live Analytics",
+    "uid": "ava-live",
+    "tags": [
+        "ava"
+    ],
+    "timezone": "utc",
+    "refresh": "10s",
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "schemaVersion": 39,
+    "panels": [
+        {
+            "id": 1,
+            "type": "stat",
+            "title": "Target freshness (AVA scrape)",
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 0,
+                "y": 0
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "time() - max(scrape_timestamp{job=\"ava\"}) < 60",
+                    "legendFormat": "fresh"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "mappings": [
+                        {
+                            "type": "value",
+                            "options": {
+                                "1": {
+                                    "text": "FRESH",
+                                    "color": "green"
+                                },
+                                "0": {
+                                    "text": "STALE",
+                                    "color": "red"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "id": 2,
+            "type": "stat",
+            "title": "Prometheus targets up",
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 6,
+                "y": 0
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum(up)",
+                    "legendFormat": "up"
+                },
+                {
+                    "expr": "count(up)",
+                    "legendFormat": "total"
+                }
+            ]
+        },
+        {
+            "id": 3,
+            "type": "timeseries",
+            "title": "Frames decoded / inferred per camera",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 4
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum by (camera) (rate(ava_frames_decoded_total[2m]))",
+                    "legendFormat": "{{camera}} decoded"
+                },
+                {
+                    "expr": "sum by (camera) (rate(ava_frames_inferred_total[2m]))",
+                    "legendFormat": "{{camera}} inferred"
+                }
+            ]
+        },
+        {
+            "id": 4,
+            "type": "timeseries",
+            "title": "Frames dropped per camera (by reason)",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 4
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum by (camera, reason) (rate(ava_frames_dropped_total[2m]))",
+                    "legendFormat": "{{camera}} {{reason}}"
+                }
+            ]
+        },
+        {
+            "id": 5,
+            "type": "timeseries",
+            "title": "Queue depth and age per camera",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 12
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "ava_queue_depth",
+                    "legendFormat": "{{camera}} depth"
+                },
+                {
+                    "expr": "ava_queue_age_seconds",
+                    "legendFormat": "{{camera}} age(s)"
+                }
+            ]
+        },
+        {
+            "id": 6,
+            "type": "timeseries",
+            "title": "Inference duration percentiles per camera",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 12
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum by (camera, le) (rate(ava_inference_duration_seconds_bucket[2m])))",
+                    "legendFormat": "{{camera}} p50"
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum by (camera, le) (rate(ava_inference_duration_seconds_bucket[2m])))",
+                    "legendFormat": "{{camera}} p95"
+                }
+            ]
+        },
+        {
+            "id": 7,
+            "type": "timeseries",
+            "title": "Event latency percentiles per camera",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 20
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "histogram_quantile(0.50, sum by (camera, le) (rate(ava_event_latency_seconds_bucket[2m])))",
+                    "legendFormat": "{{camera}} p50"
+                },
+                {
+                    "expr": "histogram_quantile(0.95, sum by (camera, le) (rate(ava_event_latency_seconds_bucket[2m])))",
+                    "legendFormat": "{{camera}} p95"
+                }
+            ]
+        },
+        {
+            "id": 8,
+            "type": "timeseries",
+            "title": "Errors and reconnects per camera",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 20
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "Prometheus"
+            },
+            "targets": [
+                {
+                    "expr": "sum by (camera, kind) (rate(ava_errors_total[2m]))",
+                    "legendFormat": "{{camera}} err:{{kind}}"
+                },
+                {
+                    "expr": "sum by (camera) (rate(ava_reconnects_total[2m]))",
+                    "legendFormat": "{{camera}} reconnects"
+                }
+            ]
+        },
+        {
+            "id": 9,
+            "type": "logs",
+            "title": "AVA structured logs (Loki)",
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 28
+            },
+            "datasource": {
+                "type": "loki",
+                "uid": "Loki"
+            },
+            "targets": [
+                {
+                    "expr": "{job=\"ava\"}",
+                    "legendFormat": ""
+                }
+            ],
+            "options": {
+                "showTime": true,
+                "wrapLogMessage": true,
+                "sortOrder": "Descending"
+            }
+        }
+    ]
+}
