@@ -70,12 +70,19 @@ class EventRecord:
     model_ref: str | None
     evidence: EvidenceLocator
     frame_index: int = -1
+    # Capture-time epoch UTC (ISO-8601) when known; None for file-only runs.
+    capture_utc: str | None = None
+    # How capture_utc was derived: "live_epoch", "replay_synthetic", or
+    # "file_pts_only" (ADR-4 / K-safety C-02).
+    time_basis: str = "file_pts_only"
     payload: dict = field(default_factory=dict)
 
     @classmethod
     def from_rule_event(cls, event: RuleEvent, *, config_version: str,
                         model_ref: str | None,
-                        evidence: EvidenceLocator | None = None) -> EventRecord:
+                        evidence: EvidenceLocator | None = None,
+                        capture_utc: str | None = None,
+                        time_basis: str = "file_pts_only") -> EventRecord:
         return cls(
             schema_version=event.schema_version,
             event_id=event.event_id,
@@ -92,6 +99,8 @@ class EventRecord:
             model_ref=model_ref,
             evidence=evidence or EvidenceLocator(),
             frame_index=event.frame_index,
+            capture_utc=capture_utc,
+            time_basis=time_basis,
             payload=dict(event.payload),
         )
 

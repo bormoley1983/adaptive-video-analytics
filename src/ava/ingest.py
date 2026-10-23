@@ -11,13 +11,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+class TimeBasis(str):
+    """How the frame's capture time was derived (ADR-4 / K-safety C-02)."""
+
+    LIVE_EPOCH = "live_epoch"
+    REPLAY_SYNTHETIC = "replay_synthetic"
+    FILE_PTS_ONLY = "file_pts_only"
+
+
 @dataclass(frozen=True)
 class Frame:
-    """One decoded frame with its source timestamp."""
+    """One decoded frame with its source timestamp.
+
+    ``timestamp_s`` is the source PTS (seconds from clip start for files,
+    seconds from session start for live). ``capture_utc`` is the real-world
+    capture time in ISO-8601 UTC when known; ``time_basis`` labels how it was
+    derived so consumers can distinguish a live camera's epoch from a
+    replayed file's synthetic value (ADR-4, K-safety C-02).
+    """
 
     index: int
     timestamp_s: float
     bgr: object  # numpy.ndarray, typed loosely to avoid a hard cv2 import here
+    capture_utc: str | None = None
+    time_basis: str = TimeBasis.FILE_PTS_ONLY
 
 
 def iter_frames(source: Path):

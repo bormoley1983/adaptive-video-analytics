@@ -313,6 +313,74 @@ class CameraConfig(BaseModel):
         return _validate_id(value, "camera id")
 
 
+class LiveCameraConfig(BaseModel):
+    """One live RTSP camera and the rule profiles applied to it."""
+
+    id: str
+    # RTSP URL (e.g. rtsp://127.0.0.1:8554/cam-01).
+    url: str
+    # Rule profile names that must resolve against `profiles` in RunConfig.
+    profiles: list[str] = Field(default_factory=list)
+    # Target inference rate in frames per second. Decode runs at native rate;
+    # inference is decimated to this rate.
+    analysis_fps: float = Field(4.0, gt=0.0)
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        return _validate_id(value, "camera id")
+
+    @field_validator("url")
+    @classmethod
+    def _valid_url(cls, value: str) -> str:
+        if not value.startswith(("rtsp://", "rtsps://")):
+            raise ValueError(f"live camera url must start with rtsp:// or rtsps:// (got {value!r})")
+        return value
+
+
+class LiveRunConfig(BaseModel):
+    """Configuration for a live multi-camera RTSP run."""
+
+    # Decode backend: "opencv" (simplest) or "gstreamer" (explicit buffer caps,
+    # NVDEC path later).
+    backend: Literal["opencv", "gstreamer"] = "opencv"
+    # Detector sharing mode: "shared" (one model, serialized inference) or
+    # "per_camera" (one model per camera, parallel inference).
+    detector_mode: Literal["shared", "per_camera"] = "shared"
+    # Per-camera frame buffer size (frames held for evidence / recent history).
+    buffer_size: int = Field(30, ge=1)
+    # Maximum reconnect attempts per camera before giving up.
+    reconnect_max: int = Field(3, ge=0)
+    # Base delay in seconds for exponential backoff on reconnect.
+    reconnect_delay_s: float = Field(1.0, gt=0.0)
+    # Live cameras.
+    cameras: list[LiveCameraConfig] = Field(default_factory=list)
+    # Rule profiles (shared with file-based runs).
+    profiles: list[RuleProfile] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _resolve_references(self) -> LiveRunConfig:
+        if not self.cameras:
+            raise ValueError("live run config requires at least one camera")
+        profile_ids = [p.id for p in self.profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            dupes = sorted({p for p in profile_ids if profile_ids.count(p) > 1})
+            raise ValueError(f"duplicate rule profile ids: {', '.join(dupes)}")
+        camera_ids = [c.id for c in self.cameras]
+        if len(camera_ids) != len(set(camera_ids)):
+            dupes = sorted({c for c in camera_ids if camera_ids.count(c) > 1})
+            raise ValueError(f"duplicate camera ids: {', '.join(dupes)}")
+        profile_id_set = set(profile_ids)
+        for cam in self.cameras:
+            for ref in cam.profiles:
+                if ref not in profile_id_set:
+                    raise ValueError(
+                        f"camera {cam.id!r} references unknown rule profile {ref!r}; "
+                        f"defined profiles: {sorted(profile_id_set) or 'none'}"
+                    )
+        return self
+
+
 class RunConfig(BaseModel):
     """A single AVA run over one or more camera inputs."""
 
@@ -372,3 +440,20 @@ def load_config(path: Path) -> RunConfig:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     return RunConfig.model_validate(raw)
+
+
+def load_live_config(path: Path) -> LiveRunConfig:
+    """Load and validate a live RTSP run configuration from YAML.
+
+    The file must contain a `live` top-level key whose value maps to
+    :class:`LiveRunConfig`. Detector settings are read from the sibling
+    `detector` key (same schema as file-based runs).
+    """
+    with path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+    if "live" not in raw:
+        raise ValueError(
+            f"config {path} does not contain a 'live' section; "
+            "use load_config() for file-based runs"
+        )
+    return LiveRunConfig.model_validate(raw["live"])
