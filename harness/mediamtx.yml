@@ -1,0 +1,34 @@
+# MediaMTX configuration for the AVA RTSP replay harness (E-3-T2 / B-019).
+#
+# CPU-only, local bind only. No GPU, no public exposure (ADR-2).
+# Four paths, one per emulated camera publisher.
+
+logLevel: info
+
+# Bind to localhost only; the host probes via 127.0.0.1.
+rtspAddress: :8554
+
+# No authentication for the local test harness.
+rtspAuthMethods: [basic]
+
+# Use TCP transport only. RTSP-over-UDP forces MediaMTX to re-packetize H.264
+# access units that exceed the ~1460-byte RTP payload limit (the "RTP packets
+# too big, remuxing" + "invalid FU-A" warnings), which is the server's main
+# steady-state CPU cost. TCP carries the media in-band with no per-packet
+# re-muxing, cutting that cost and removing UDP packet-loss/reorder concerns
+# on the local loopback path.
+rtspTransports: [tcp]
+
+paths:
+  # cam-01: crosswalk-day-pedestrians (people/vehicle baseline)
+  cam-01:
+    source: publisher
+  # cam-02: intersection-signal-day-vehicles (daytime signal)
+  cam-02:
+    source: publisher
+  # cam-03: intersection-night (night traffic)
+  cam-03:
+    source: publisher
+  # cam-04: highway-fog-low-visibility (low-visibility stress)
+  cam-04:
+    source: publisher

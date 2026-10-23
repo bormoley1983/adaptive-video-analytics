@@ -1,0 +1,32 @@
+# AVA RTSP replay harness manifest (E-3-T2 / B-019).
+#
+# Deterministic camera-to-source mapping. Extensible to 16, 25, 50 streams by
+# adding entries following the same pattern. Each publisher re-encodes its
+# source clip to a uniform H.264 720p @ 10 FPS stream for consistent capacity
+# measurement (ADR-2).
+
+version: 1
+target:
+  codec: h264
+  resolution: 1280x720
+  fps: 10
+  gop: 30          # keyframe every 30 frames (~3 s at 10 FPS)
+  bitrate: 2M
+
+cameras:
+  - id: cam-01
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-01
+    description: Daytime crosswalk, people/vehicle baseline
+  - id: cam-02
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-02
+    description: Signalized intersection, daytime vehicles
+  - id: cam-03
+    source: intersection-night.mp4
+    rtsp_path: /cam-03
+    description: Wide urban intersection at night
+  - id: cam-04
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-04
+    description: Multi-lane highway in dense fog
