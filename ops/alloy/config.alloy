@@ -1,0 +1,43 @@
+// Alloy config for the AVA observability platform (B-022).
+//
+// Discovers containers on the local Docker daemon, tails their log lines and
+// forwards only those from containers whose names match ^ava-.* to Loki. The
+// AVA analytics process logs structured JSON to stdout (see
+// src/ava/telemetry.py), so each line arrives in Loki as a parseable payload
+// tagged job=ava service=ava.
+
+discovery.docker "linux" {
+  host = "unix:///var/run/docker.sock"
+}
+
+loki.source.docker "ava" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.linux.targets
+  labels     = { job = "ava", service = "ava" }
+  forward_to = [loki.process.ava.receiver]
+}
+
+// Tag every line with the identity used by the Grafana dashboard and log
+// queries. Only AVA containers run on this host, so no further filtering is
+// needed; the job=ava label scopes all log queries.
+loki.process "ava" {
+  forward_to = [loki.write.ava.receiver]
+
+  stage.labels {
+    values = {
+      job     = "ava",
+      service = "ava",
+    }
+  }
+}
+
+loki.write "ava" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    job     = "ava",
+    service = "ava",
+  }
+}

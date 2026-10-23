@@ -1,0 +1,128 @@
+# AVA local observability platform (B-022, ADR-15).
+#
+# Separate CPU-only Compose project, independent of the GPU analytics worker
+# and the RTSP replay harness. Services: Prometheus, Grafana, Loki, Alloy.
+#
+# - Images pinned by digest (re-pin after an upstream update by pulling and
+#   replacing the @sha256: reference).
+# - All host ports bind to 127.0.0.1 only; service-to-service traffic uses
+#   the project network.
+# - State persists in named volumes; development credentials come from an
+#   ignored .env (see .env.example) and are never committed.
+# - The Prometheus AVA scrape job targets the host-run analytics process via
+#   host-gateway (the live worker runs on the host, not in this project).
+#
+#   cp ops/.env.example ops/.env   # then set a Grafana admin password
+#   docker compose -f ops/docker-compose.yml up -d
+#
+name: ava-ops
+
+x-ava-target: &ava-target "host-gateway"
+
+services:
+  prometheus:
+    image: prom/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    restart: on-failure
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ops-prometheus:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    extra_hosts:
+      # The AVA live worker runs on the host; reach its loopback /metrics
+      # endpoint through the Docker host-gateway address.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    mem_limit: 1g
+
+  loki:
+    image: grafana/loki@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+    restart: on-failure
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - ops-loki:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    healthcheck:
+      # The Loki image is distroless (no shell, no wget/curl). The binary
+      # starts in under a second and fails fast on an invalid config, so a
+      # successful -version run plus the process staying up is the readiness
+      # signal; Grafana's depends_on gates dashboard availability on top.
+      test: ["CMD", "loki", "-version"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 1g
+
+  alloy:
+    image: grafana/alloy@sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18
+    restart: on-failure
+    command: ["run", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only Docker socket for container log discovery. Treated as
+      # privileged per ADR-15; the risk is documented in ops/README.md.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      # The Alloy image ships no HTTP client; perl's IO::Socket::INET is
+      # available. A TCP connect to Alloy's own telemetry port (12345) proves
+      # the process is up and serving.
+      test: [
+        "CMD",
+        "perl",
+        "-MIO::Socket::INET",
+        "-e",
+        "my $$s=IO::Socket::INET->new(PeerAddr=>\"127.0.0.1:12345\",Timeout=>3); exit($$s?0:1)"
+      ]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 512m
+
+  grafana:
+    image: grafana/grafana@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
+    restart: on-failure
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in ops/.env}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ops-grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    mem_limit: 1g
+
+volumes:
+  ops-prometheus:
+  ops-loki:
+  ops-grafana:
