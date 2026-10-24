@@ -22,6 +22,15 @@ live:
   buffer_size: 40
   reconnect_max: 3
   reconnect_delay_s: 1.0
+  # Bounded run: harness streams are infinite, so cap the wall-clock window.
+  duration_s: 120
+
+  telemetry:
+    prometheus_port: 9464
+    # Bind to all interfaces so the Prometheus container (reaching the host via
+    # its docker0 bridge IP) can scrape it. Loopback-only would be unreachable
+    # from the container.
+    prometheus_host: "0.0.0.0"
 
   cameras:
     - id: cam-01

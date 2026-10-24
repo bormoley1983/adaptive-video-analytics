@@ -69,6 +69,33 @@ class FakeSource:
             )
 
 
+class FakeCapture5:
+    """OpenCV stand-in that serves 5 frames then reports stream end."""
+
+    def __init__(self) -> None:
+        self._idx = 0
+
+    def isOpened(self) -> bool:
+        return True
+
+    def set(self, prop, value):
+        return True
+
+    def get(self, prop) -> float:
+        if prop == 5:  # cv2.CAP_PROP_FPS
+            return 10.0
+        return 0.0
+
+    def read(self):
+        if self._idx < 5:
+            self._idx += 1
+            return True, np.zeros((480, 640, 3), dtype=np.uint8)
+        return False, None
+
+    def release(self):
+        pass
+
+
 def _make_live_config(n_cameras: int = 1, **kwargs) -> LiveRunConfig:
     cameras = [
         LiveCameraConfig(
@@ -643,3 +670,214 @@ class TestStructuredLogs:
         text = render_metrics()
         assert "ava_frames_decoded_total" in text
         assert 'camera="cam-01"' in text
+
+
+class TestReconnectTelemetry:
+    """B-021 closeout: reconnects are counted, metered and logged."""
+
+    def _run_with_reconnects(self, tmp_path, monkeypatch, capsys, n_cameras=2):
+        import json
+
+        import ava.live_ingest as li
+        import ava.live_runner as lr
+        from ava.telemetry import render_metrics
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        # Each camera's source ends after 5 frames; with reconnect_max=1 the
+        # real ingest loop performs exactly one mid-stream reconnect per
+        # camera before giving up. Patching _open_source (not iter_live_frames)
+        # keeps the real reconnect/callback path under test.
+        def fake_open(cfg: LiveSourceConfig):
+            return FakeCapture5(), 10.0
+
+        monkeypatch.setattr(li, "_open_source", fake_open)
+        monkeypatch.setattr(li.time, "sleep", lambda s: None)
+
+        live_config = _make_live_config(n_cameras=n_cameras, reconnect_max=1)
+        det_config = _make_detector_config(tmp_path)
+
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        lines = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip()
+        ]
+        return summary, lines, render_metrics()
+
+    def test_reconnect_updates_stats_metrics_and_log(self, tmp_path, monkeypatch, capsys):
+        summary, lines, text = self._run_with_reconnects(tmp_path, monkeypatch, capsys)
+
+        cam_stats = {c.camera_id: c for c in summary.cameras}
+        assert cam_stats["cam-01"].reconnects == 1
+        assert cam_stats["cam-02"].reconnects == 1
+
+        reconnect_logs = [l for l in lines if l["component"] == "live_run.reconnect"]
+        assert len(reconnect_logs) == 2
+        by_cam = {l["camera_id"]: l for l in reconnect_logs}
+        assert by_cam["cam-01"]["attempt"] == 1
+        assert by_cam["cam-01"]["session_id"] == "s2"
+        assert by_cam["cam-02"]["attempt"] == 1
+        assert by_cam["cam-02"]["session_id"] == "s2"
+
+        # The Prometheus counter series exists with a value of 1 per camera.
+        for cam in ("cam-01", "cam-02"):
+            line = next(
+                l for l in text.splitlines()
+                if l.startswith(f'ava_reconnects_total{{camera="{cam}"')
+            )
+            assert line.split()[-1] == "1.0"
+
+    def test_no_reconnects_on_clean_run(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        import ava.live_runner as lr
+        from ava.telemetry import render_metrics
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=5, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1, reconnect_max=0)
+        det_config = _make_detector_config(tmp_path)
+
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        assert summary.cameras[0].reconnects == 0
+
+        lines = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip()
+        ]
+        assert not any(l["component"] == "live_run.reconnect" for l in lines)
+
+        # No reconnects recorded: no sample lines for the counter (only the
+        # HELP/TYPE metadata, which is always present).
+        assert not any(
+            l.startswith("ava_reconnects_total{") for l in render_metrics().splitlines()
+        )
+
+
+class TestOverloadTelemetry:
+    """B-021 closeout: overload (slow sink) is visible in Prometheus metrics."""
+
+    def test_slow_sink_drops_visible_in_metrics(self, tmp_path, monkeypatch):
+        import ava.live_runner as lr
+        from ava.telemetry import render_metrics
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=20, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(
+            n_cameras=1, buffer_size=5, slow_sink_s=0.01
+        )
+        det_config = _make_detector_config(tmp_path)
+
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        cam = summary.cameras[0]
+        assert cam.frames_decoded == 20
+        assert cam.frames_dropped == 15
+
+        text = render_metrics()
+        assert 'ava_frames_dropped_total{camera="cam-01",reason="buffer_full"' in text
+        # The drop counter value matches the stats.
+        for line in text.splitlines():
+            if line.startswith('ava_frames_dropped_total{camera="cam-01",reason="buffer_full"'):
+                assert line.split()[-1] == "15.0"
+
+
+class TestBoundedDuration:
+    """B-021 closeout: a bounded run stops infinite streams and writes metrics."""
+
+    def test_duration_stops_infinite_stream_and_writes_metrics(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import json
+        import time
+
+        import ava.live_ingest as li
+        import ava.live_runner as lr
+
+        class InfiniteCapture:
+            """Serves frames forever; read() blocks briefly like a live stream."""
+
+            def __init__(self) -> None:
+                self._idx = 0
+
+            def isOpened(self) -> bool:
+                return True
+
+            def set(self, prop, value):
+                return True
+
+            def get(self, prop) -> float:
+                if prop == 5:  # cv2.CAP_PROP_FPS
+                    return 10.0
+                return 0.0
+
+            def read(self):
+                time.sleep(0.01)
+                self._idx += 1
+                return True, np.zeros((48, 64, 3), dtype=np.uint8)
+
+            def release(self):
+                pass
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+        # Patch _open_source (not iter_live_frames) so the real stop-event path
+        # in iter_live_frames is exercised.
+        monkeypatch.setattr(li, "_open_source", lambda cfg: (InfiniteCapture(), 10.0))
+
+        live_config = _make_live_config(n_cameras=1, duration_s=0.3)
+        det_config = _make_detector_config(tmp_path)
+
+        start = time.perf_counter()
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+        elapsed = time.perf_counter() - start
+
+        # The run returned on its own: bounded by duration_s plus teardown.
+        assert elapsed < 10.0
+        cam = summary.cameras[0]
+        assert cam.frames_decoded > 0
+        assert (tmp_path / "out" / "metrics.json").exists()
+
+        lines = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip()
+        ]
+        bounded = next(l for l in lines if l["component"] == "live_run.bounded")
+        assert bounded["duration_seconds"] == 0.3
+
+    def test_zero_duration_is_unbounded(self, tmp_path, monkeypatch):
+        """duration_s=0 (default) keeps the existing stream-end behavior."""
+        import ava.live_runner as lr
+
+        fake_det = FakeDetector()
+        monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
+
+        def fake_iter(cfg: LiveSourceConfig):
+            return FakeSource(n_frames=5, fps=10.0)(cfg)
+
+        monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
+
+        live_config = _make_live_config(n_cameras=1)  # duration_s defaults to 0
+        det_config = _make_detector_config(tmp_path)
+
+        summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
+
+        assert summary.cameras[0].frames_decoded == 5
