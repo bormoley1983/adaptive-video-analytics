@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -152,6 +155,149 @@ class TestIterLiveFrames:
         assert result[0].timestamp_s == pytest.approx(0.0)
         assert result[1].timestamp_s == pytest.approx(1.0)
         assert result[2].timestamp_s == pytest.approx(2.0)
+
+    def test_reconnect_callback_fires_on_stream_end(self, monkeypatch):
+        """Mid-stream disconnect invokes the callback with attempt + session."""
+        frames_batch = _make_frames(2)
+        call_count = 0
+
+        import ava.live_ingest as li
+
+        def fake_open(cfg):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return FakeCapture(frames_batch, fps=10.0), 10.0
+            raise RuntimeError("cannot open")
+
+        monkeypatch.setattr(li, "_open_source", fake_open)
+        monkeypatch.setattr(li.time, "sleep", lambda s: None)
+
+        calls: list[tuple[int, str]] = []
+        config = LiveSourceConfig(
+            url="rtsp://test",
+            reconnect_max=2,
+            reconnect_delay_s=0.01,
+            on_reconnect=lambda attempt, session_id: calls.append((attempt, session_id)),
+        )
+        list(iter_live_frames(config))
+
+        # One mid-stream reconnect (after first batch ends) and one open-failure
+        # reconnect (third open raises).
+        assert calls == [(1, "s2"), (2, "s3")]
+
+    def test_reconnect_callback_fires_on_open_failure(self, monkeypatch):
+        """Open failure invokes the callback before the backoff sleep."""
+        import ava.live_ingest as li
+
+        def fake_open(cfg):
+            raise RuntimeError("cannot open")
+
+        monkeypatch.setattr(li, "_open_source", fake_open)
+        monkeypatch.setattr(li.time, "sleep", lambda s: None)
+
+        calls: list[tuple[int, str]] = []
+        config = LiveSourceConfig(
+            url="rtsp://test",
+            reconnect_max=2,
+            reconnect_delay_s=0.01,
+            on_reconnect=lambda attempt, session_id: calls.append((attempt, session_id)),
+        )
+        result = list(iter_live_frames(config))
+
+        assert result == []
+        assert calls == [(1, "s2"), (2, "s3")]
+
+    def test_no_callback_without_disconnects(self, monkeypatch):
+        """A clean stream that ends without reconnect budget fires no callback."""
+        frames = _make_frames(3)
+        fake = FakeCapture(frames, fps=10.0)
+
+        import ava.live_ingest as li
+        monkeypatch.setattr(li, "_open_source", lambda cfg: (fake, 10.0))
+
+        calls: list[tuple[int, str]] = []
+        config = LiveSourceConfig(
+            url="rtsp://test",
+            reconnect_max=0,
+            on_reconnect=lambda attempt, session_id: calls.append((attempt, session_id)),
+        )
+        result = list(iter_live_frames(config))
+
+        assert len(result) == 3
+        assert calls == []
+
+    def test_stop_event_halts_infinite_stream(self, monkeypatch):
+        """A set stop event ends the iterator even though frames never run out."""
+        import ava.live_ingest as li
+
+        class InfiniteCapture:
+            def __init__(self) -> None:
+                self.opened = True
+
+            def isOpened(self) -> bool:
+                return self.opened
+
+            def set(self, prop, value):
+                return True
+
+            def get(self, prop) -> float:
+                if prop == 5:
+                    return 10.0
+                return 0.0
+
+            def read(self):
+                # Never exhausts; blocks briefly to mimic a live stream.
+                time.sleep(0.01)
+                return True, np.zeros((48, 64, 3), dtype=np.uint8)
+
+            def release(self):
+                self.opened = False
+
+        monkeypatch.setattr(li, "_open_source", lambda cfg: (InfiniteCapture(), 10.0))
+
+        stop_event = threading.Event()
+        config = LiveSourceConfig(
+            url="rtsp://test", reconnect_max=3, stop_event=stop_event
+        )
+
+        def _stop_soon() -> None:
+            time.sleep(0.05)
+            stop_event.set()
+
+        stopper = threading.Thread(target=_stop_soon)
+        stopper.start()
+        result = list(iter_live_frames(config))
+        stopper.join()
+
+        # Some frames were yielded before the stop landed; the iterator ended.
+        assert len(result) >= 1
+        assert all(isinstance(f, Frame) for f in result)
+
+    def test_stop_event_during_backoff_returns_promptly(self, monkeypatch):
+        """A stop set during reconnect backoff ends the iterator without sleeping."""
+        import ava.live_ingest as li
+
+        def fake_open(cfg):
+            raise RuntimeError("cannot open")
+
+        monkeypatch.setattr(li, "_open_source", fake_open)
+
+        stop_event = threading.Event()
+        config = LiveSourceConfig(
+            url="rtsp://test",
+            reconnect_max=5,
+            reconnect_delay_s=30.0,  # would hang if not interruptible
+            stop_event=stop_event,
+        )
+        stop_event.set()
+
+        start = time.perf_counter()
+        result = list(iter_live_frames(config))
+        elapsed = time.perf_counter() - start
+
+        assert result == []
+        assert elapsed < 1.0
 
 
 class TestProbeLive:

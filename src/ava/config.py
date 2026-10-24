@@ -10,6 +10,7 @@ rules.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -322,6 +323,10 @@ class TelemetryConfig(BaseModel):
 
     # Bind a local /metrics endpoint when set (loopback only by default).
     prometheus_port: int | None = Field(None, ge=1, le=65535)
+    # Interface the scrape endpoint binds to. Loopback keeps the study stack off
+    # the LAN; set "0.0.0.0" when a container (e.g. Prometheus via host-gateway)
+    # must reach it through the host's bridge IP.
+    prometheus_host: str = "127.0.0.1"
     # Minimum severity emitted to stdout: debug < info < warning < error.
     log_level: Literal["debug", "info", "warning", "error"] = "info"
 
@@ -370,6 +375,11 @@ class LiveRunConfig(BaseModel):
     slow_sink_s: float = Field(0.0, ge=0.0)
     # Metrics sampling interval in seconds for host/GPU resource polling.
     metrics_interval_s: float = Field(5.0, gt=0.0)
+    # Bounded run duration in seconds. When set (> 0), all cameras are stopped
+    # after this wall-clock window so the run returns and writes its summary;
+    # when 0 (default) the run is unbounded and stops only on stream end or an
+    # external stop signal.
+    duration_s: float = Field(0.0, ge=0.0)
     # Optional structured-log / Prometheus surface (B-021).
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     # Live cameras.
@@ -450,15 +460,40 @@ class RunConfig(BaseModel):
         return self
 
 
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _resolve_env_refs(value: object) -> object:
+    """Resolve ``${VAR}`` / ``${VAR:-default}`` references from the environment.
+
+    A reference is replaced by the variable's value, or by its default when the
+    variable is unset (or empty). Strings with no reference are returned as-is;
+    containers are resolved recursively so any config value can be env-driven.
+    """
+    if isinstance(value, str):
+        def _sub(match: re.Match[str]) -> str:
+            var, default = match.group(1), match.group(2)
+            return os.environ.get(var) or (default if default is not None else "")
+
+        return _ENV_REF.sub(_sub, value)
+    if isinstance(value, dict):
+        return {k: _resolve_env_refs(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_env_refs(v) for v in value]
+    return value
+
+
 def load_config(path: Path) -> RunConfig:
     """Load and validate a run configuration from YAML.
 
+    Environment references (``${VAR}`` / ``${VAR:-default}``) are resolved at
+    load time so values can come from the environment with safe defaults.
     Validation failures (bad geometry, thresholds, unresolved profile refs)
     raise before any processing starts (ADR-4).
     """
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    return RunConfig.model_validate(raw)
+    return RunConfig.model_validate(_resolve_env_refs(raw))
 
 
 def load_live_config(path: Path) -> LiveRunConfig:
@@ -466,7 +501,8 @@ def load_live_config(path: Path) -> LiveRunConfig:
 
     The file must contain a `live` top-level key whose value maps to
     :class:`LiveRunConfig`. Detector settings are read from the sibling
-    `detector` key (same schema as file-based runs).
+    `detector` key (same schema as file-based runs). Environment references
+    are resolved at load time (see :func:`_resolve_env_refs`).
     """
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -475,4 +511,4 @@ def load_live_config(path: Path) -> LiveRunConfig:
             f"config {path} does not contain a 'live' section; "
             "use load_config() for file-based runs"
         )
-    return LiveRunConfig.model_validate(raw["live"])
+    return LiveRunConfig.model_validate(_resolve_env_refs(raw["live"]))

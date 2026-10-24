@@ -119,6 +119,9 @@ class _CameraWorker:
         self.stats = CameraStats(camera_id=cam_config.id)
         self.metrics = metrics or CameraMetrics(camera_id=cam_config.id)
         self._stop_event = threading.Event()
+        # Shared with the ingest iterator so a stop signal interrupts an
+        # in-flight cap.read() promptly (bounded runs, external stops).
+        source_config.stop_event = self._stop_event
         self._frame_buffer: deque = deque(maxlen=buffer_size)
         # Inference pacing (source-time based, ADR-4).
         self._last_infer_ts: float | None = None
@@ -268,11 +271,31 @@ def run_live(
         for ref in cam.profiles:
             rules.extend(profiles_by_id[ref].rules)
 
+        def _on_reconnect(
+            attempt: int, session_id: str, _cam_id: str = cam.id
+        ) -> None:
+            # Runs on the camera's worker thread; stats are per-worker.
+            for w in workers:
+                if w.cam.id == _cam_id:
+                    w.stats.reconnects += 1
+                    break
+            if telemetry is not None:
+                telemetry.record_reconnect(_cam_id)
+            run_ctx.log(
+                "live_run.reconnect",
+                "warning",
+                "camera stream reconnected",
+                camera_id=_cam_id,
+                attempt=attempt,
+                session_id=session_id,
+            )
+
         source_config = LiveSourceConfig(
             url=cam.url,
             backend=live_config.backend,
             reconnect_max=live_config.reconnect_max,
             reconnect_delay_s=live_config.reconnect_delay_s,
+            on_reconnect=_on_reconnect,
         )
 
         worker = _CameraWorker(
@@ -311,7 +334,10 @@ def run_live(
     )
     metrics_thread = None
     if live_config.telemetry.prometheus_port is not None:
-        metrics_thread = serve_metrics(live_config.telemetry.prometheus_port)
+        metrics_thread = serve_metrics(
+            live_config.telemetry.prometheus_port,
+            host=live_config.telemetry.prometheus_host,
+        )
 
     # Wire per-camera metrics into workers.
     for i, worker in enumerate(workers):
@@ -359,9 +385,29 @@ def run_live(
     sampler_thread.start()
     telemetry.mark_run_started()
 
+    # Bounded run: stop every camera after the configured wall-clock window so
+    # infinite streams still terminate cleanly and write their summary.
+    duration_timer = None
+    if live_config.duration_s > 0:
+        def _stop_all_workers() -> None:
+            for worker in workers:
+                worker.stop()
+
+        duration_timer = threading.Timer(live_config.duration_s, _stop_all_workers)
+        duration_timer.daemon = True
+        duration_timer.start()
+        run_ctx.log(
+            "live_run.bounded",
+            "info",
+            "bounded run duration armed",
+            duration_seconds=live_config.duration_s,
+        )
+
     # Wait for all workers to finish (reconnect budget exhausted or stopped).
     for t in threads:
         t.join()
+    if duration_timer is not None:
+        duration_timer.cancel()
 
     sampler_stop.set()
     sampler_thread.join(timeout=2.0)

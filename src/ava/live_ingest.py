@@ -18,8 +18,9 @@ failure allocates a new session identity (ADR-4 discontinuity semantics).
 
 from __future__ import annotations
 
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
@@ -42,6 +43,13 @@ class LiveSourceConfig:
     reconnect_delay_s: float = 1.0
     # GStreamer-specific: maximum number of frames to buffer in the pipeline.
     gst_queue_size: int = 20
+    # Optional hook invoked on every reconnect with (attempt, new_session_id).
+    # Attempt is 1-based; session_id is the identity that will be used for
+    # frames after this reconnect (ADR-4 discontinuity semantics).
+    on_reconnect: Callable[[int, str], None] | None = None
+    # Optional stop signal checked between frame reads and during backoff.
+    # When set, the iterator stops yielding and returns cleanly.
+    stop_event: threading.Event | None = None
 
 
 @dataclass
@@ -60,8 +68,11 @@ def _build_opencv_capture(url: str):
     import cv2  # deferred: heavy import
 
     cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-    # Prefer TCP transport for loss-free loopback delivery.
-    cap.set(cv2.CAP_PROP_RTSP_TRANSPORT, 0)  # 0 = TCP
+    # Prefer TCP transport for loss-free loopback delivery. The property is only
+    # exposed by FFmpeg builds that patch it in; stock OpenCV wheels omit it, so
+    # guard with hasattr and fall back to the backend default (UDP).
+    if hasattr(cv2, "CAP_PROP_RTSP_TRANSPORT"):
+        cap.set(cv2.CAP_PROP_RTSP_TRANSPORT, 0)  # 0 = TCP
     return cap
 
 
@@ -112,15 +123,26 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
     """
     state = LiveSourceState()
     delay = config.reconnect_delay_s
+    stop_event = config.stop_event
+
+    def _stopped() -> bool:
+        return stop_event is not None and stop_event.is_set()
 
     while True:
+        if _stopped():
+            return
         try:
             cap, fps = _open_source(config)
         except RuntimeError:
-            if state.reconnects >= config.reconnect_max:
+            if state.reconnects >= config.reconnect_max or _stopped():
                 return
             state.reconnects += 1
-            time.sleep(delay)
+            state.session_id = f"s{state.reconnects + 1}"
+            if config.on_reconnect is not None:
+                config.on_reconnect(state.reconnects, state.session_id)
+            # Interruptible backoff so a stop signal lands promptly.
+            if stop_event is not None and stop_event.wait(delay):
+                return
             delay *= 2
             continue
 
@@ -131,6 +153,8 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
 
         try:
             while True:
+                if _stopped():
+                    break
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -147,11 +171,13 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
         finally:
             cap.release()
 
-        # Stream ended or read failed; attempt reconnect.
-        if state.reconnects >= config.reconnect_max:
+        # Stream ended, read failed, or stopped; attempt reconnect.
+        if _stopped() or state.reconnects >= config.reconnect_max:
             return
         state.reconnects += 1
         state.session_id = f"s{state.reconnects + 1}"
+        if config.on_reconnect is not None:
+            config.on_reconnect(state.reconnects, state.session_id)
         time.sleep(delay)
         delay *= 2
 

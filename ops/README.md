@@ -34,7 +34,9 @@ reachable from the LAN.
 The live analytics worker runs on the host and exposes `/metrics` when
 `live.telemetry.prometheus_port` is set in the run config (B-021). Prometheus
 reaches it through `host.docker.internal` (compose maps it to
-`host-gateway`) at port `$AVA_METRICS_PORT` (default 9464, see `ops/.env`).
+`host-gateway`) at port 9464 — the canonical AVA metrics port, kept in sync
+with `live.telemetry.prometheus_port`. If you change that value, update the
+`ava` job target in `ops/prometheus/prometheus.yml` too.
 
 To produce scrape evidence:
 
