@@ -48,6 +48,14 @@ Applies to every model and client.
 
 ## Tool-call discipline (dead-loop guard)
 
+**Hard pre-call gate — check before EVERY tool call, no exceptions:**
+
+1. Is this call identical to my immediately previous one (same tool, same
+   parameters)? If yes → STOP. Do not issue it. No retry is permitted.
+2. Did my last call return empty or unchanged output? If yes → treat that as a
+   finding, not a failure. The next call MUST change at least one meaningful
+   parameter, or I must stop and report the conclusion in plain text.
+
 - Never repeat a tool call with identical parameters expecting a different
   result. If the same call returns the same output twice, stop retrying it.
 - An empty or unchanged result is a finding, not a failure to re-poll. Act on
