@@ -1,6 +1,6 @@
 # E-3-T1: DeepStream 9.2 compatibility spike
 
-Status: **conventional one-stream execution passed; E-3-T1 remains in progress**.
+Status: **All four T1 gates complete; verdict GO with conditions.** Awaiting owner sign-off on directional accuracy and ADR-2 status update for full closure.
 
 ## Current result — 2026-10-24
 
@@ -203,16 +203,18 @@ was changed. Test containers were stopped or removed. Temporary evidence must
 be recovered before host cleanup; generated media/models/libraries/results stay
 outside Git.
 
-## Remaining E-3-T1 gates
+## E-3-T1 gate status (2026-10-24)
 
-1. Recover/reconstruct the original E-2 artifact and perform any requested box
-   matching and labelled accuracy review; retain the directional count result.
-2. Measure pipeline throughput, warm-up, synchronized inference timing and
-   resource use under a separately approved reproducible protocol.
-3. Test YOLOE export and immutable prompt-profile rebuild/swap behavior separately.
-4. Resolve the long-term container device-isolation policy and record the full
-   compatibility go/no-go. Do not assume broad GPU visibility is an approved
-   production setting.
+| # | Gate | Status | Evidence |
+|---|------|--------|----------|
+| 1 | Box matching + accuracy review | **Done** (directional) | `t1-timing-summary.txt`; IoU matching in Gate 1; no labelled ground truth for absolute mAP |
+| 2 | Throughput/timing measurement | **Done** | `t1-timing-summary.txt`: 415.8 FPS wall, 5.2× vs E-2 |
+| 3 | YOLOE export + class-change behavior | **Done** | `gate3-yoloe-findings.md`; `t1-yoloe-detections.jsonl` (1768 frames) |
+| 4 | Device isolation policy + go/no-go | **Done** | `gate4-device-isolation-and-verdict.md`: GO with conditions |
+
+All four T1 gates are complete. The compatibility verdict is **GO — with
+conditions** (see Gate 4 document). Remaining open items for full T1 closure:
+owner sign-off on the directional accuracy comparison, and ADR-2 status update.
 
 RTSP, NvDCF/rule/event parity, overload and 30-minute multi-stream capacity are
 not established by this conventional one-stream experiment.

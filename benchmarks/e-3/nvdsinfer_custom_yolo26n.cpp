@@ -14,84 +14,140 @@
 
 #include "nvdsinfer_custom_impl.h"
 
-namespace {
+namespace
+{
 
-constexpr int kNumClasses = 80;
-constexpr int kNumAnchors = 8400;
-constexpr float kNmsIouThreshold = 0.5F;
-constexpr std::size_t kKeepTopK = 200;
+    constexpr int kNumClasses = 80;
+    constexpr int kNumAnchors = 8400;
+    constexpr float kNmsIouThreshold = 0.5F;
+    constexpr std::size_t kKeepTopK = 200;
 
-std::atomic<unsigned long long> frameSequence{0};
-std::mutex outputMutex;
+    std::atomic<unsigned long long> frameSequence{0};
+    std::mutex outputMutex;
 
-float intersectionOverUnion(
-    const NvDsInferObjectDetectionInfo& a,
-    const NvDsInferObjectDetectionInfo& b) {
-    const float interLeft = std::max(a.left, b.left);
-    const float interTop = std::max(a.top, b.top);
-    const float interRight = std::min(a.left + a.width, b.left + b.width);
-    const float interBottom = std::min(a.top + a.height, b.top + b.height);
-    const float interArea =
-        std::max(0.0F, interRight - interLeft) *
-        std::max(0.0F, interBottom - interTop);
-    const float unionArea =
-        a.width * a.height + b.width * b.height - interArea;
-    return unionArea > 0.0F ? interArea / unionArea : 0.0F;
-}
-
-float thresholdForClass(
-    const NvDsInferParseDetectionParams& params,
-    unsigned int classId) {
-    if (classId < params.perClassThreshold.size()) {
-        return params.perClassThreshold[classId];
-    }
-    return 0.0F;
-}
-
-void writeDetections(const std::vector<NvDsInferObjectDetectionInfo>& objects) {
-    const char* outputPath = std::getenv("AVA_DETECTION_JSONL");
-    if (outputPath == nullptr || outputPath[0] == '\0') {
-        return;
+    float intersectionOverUnion(
+        const NvDsInferObjectDetectionInfo &a,
+        const NvDsInferObjectDetectionInfo &b)
+    {
+        const float interLeft = std::max(a.left, b.left);
+        const float interTop = std::max(a.top, b.top);
+        const float interRight = std::min(a.left + a.width, b.left + b.width);
+        const float interBottom = std::min(a.top + a.height, b.top + b.height);
+        const float interArea =
+            std::max(0.0F, interRight - interLeft) *
+            std::max(0.0F, interBottom - interTop);
+        const float unionArea =
+            a.width * a.height + b.width * b.height - interArea;
+        return unionArea > 0.0F ? interArea / unionArea : 0.0F;
     }
 
-    const auto frame = frameSequence.fetch_add(1, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> guard(outputMutex);
-    FILE* output = std::fopen(outputPath, "a");
-    if (output == nullptr) {
-        return;
+    float thresholdForClass(
+        const NvDsInferParseDetectionParams &params,
+        unsigned int classId)
+    {
+        if (classId < params.perClassThreshold.size())
+        {
+            return params.perClassThreshold[classId];
+        }
+        return 0.0F;
     }
 
-    std::fprintf(output, "{\"frame\":%llu,\"detections\":[", frame);
-    for (std::size_t index = 0; index < objects.size(); ++index) {
-        const auto& object = objects[index];
-        std::fprintf(
-            output,
-            "%s{\"class_id\":%u,\"confidence\":%.6f,"
-            "\"left\":%.3f,\"top\":%.3f,\"width\":%.3f,\"height\":%.3f}",
-            index == 0 ? "" : ",",
-            object.classId,
-            object.detectionConfidence,
-            object.left,
-            object.top,
-            object.width,
-            object.height);
-    }
-    std::fputs("]}\n", output);
-    std::fclose(output);
-}
+    // Inverse letterbox transform: model-input pixel coords -> source frame pixels.
+    // With maintain-aspect-ratio=1 and symmetric-padding=1, the source frame is
+    // scaled to fit the network input with uniform padding on the shorter axis.
+    struct LetterboxParams
+    {
+        float scale = 1.0F;
+        float padX = 0.0F;
+        float padY = 0.0F;
+        bool valid = false;
+    };
 
-}  // namespace
+    LetterboxParams computeLetterbox(float modelW, float modelH)
+    {
+        const char *envW = std::getenv("AVA_SOURCE_WIDTH");
+        const char *envH = std::getenv("AVA_SOURCE_HEIGHT");
+        if (envW == nullptr || envH == nullptr)
+        {
+            return {};
+        }
+        const float srcW = std::atof(envW);
+        const float srcH = std::atof(envH);
+        if (srcW <= 0.0F || srcH <= 0.0F)
+        {
+            return {};
+        }
+        LetterboxParams p;
+        p.scale = std::min(modelW / srcW, modelH / srcH);
+        p.padX = (modelW - srcW * p.scale) / 2.0F;
+        p.padY = (modelH - srcH * p.scale) / 2.0F;
+        p.valid = true;
+        return p;
+    }
+
+    void writeDetections(
+        const std::vector<NvDsInferObjectDetectionInfo> &objects,
+        const LetterboxParams &lb)
+    {
+        const char *outputPath = std::getenv("AVA_DETECTION_JSONL");
+        if (outputPath == nullptr || outputPath[0] == '\0')
+        {
+            return;
+        }
+
+        const auto frame = frameSequence.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> guard(outputMutex);
+        FILE *output = std::fopen(outputPath, "a");
+        if (output == nullptr)
+        {
+            return;
+        }
+
+        std::fprintf(output, "{\"frame\":%llu,\"detections\":[", frame);
+        for (std::size_t index = 0; index < objects.size(); ++index)
+        {
+            const auto &object = objects[index];
+            float left = object.left;
+            float top = object.top;
+            float width = object.width;
+            float height = object.height;
+            if (lb.valid)
+            {
+                left = (left - lb.padX) / lb.scale;
+                top = (top - lb.padY) / lb.scale;
+                width = width / lb.scale;
+                height = height / lb.scale;
+            }
+            std::fprintf(
+                output,
+                "%s{\"class_id\":%u,\"confidence\":%.6f,"
+                "\"left\":%.3f,\"top\":%.3f,\"width\":%.3f,\"height\":%.3f}",
+                index == 0 ? "" : ",",
+                object.classId,
+                object.detectionConfidence,
+                left,
+                top,
+                width,
+                height);
+        }
+        std::fputs("]}\n", output);
+        std::fclose(output);
+    }
+
+} // namespace
 
 extern "C" bool NvDsInferParseCustomYolo26N(
-    const std::vector<NvDsInferLayerInfo>& outputLayersInfo,
-    const NvDsInferNetworkInfo& networkInfo,
-    const NvDsInferParseDetectionParams& detectionParams,
-    std::vector<NvDsInferObjectDetectionInfo>& objectList) {
-    if (outputLayersInfo.empty() || outputLayersInfo[0].buffer == nullptr) {
+    const std::vector<NvDsInferLayerInfo> &outputLayersInfo,
+    const NvDsInferNetworkInfo &networkInfo,
+    const NvDsInferParseDetectionParams &detectionParams,
+    std::vector<NvDsInferObjectDetectionInfo> &objectList)
+{
+    if (outputLayersInfo.empty() || outputLayersInfo[0].buffer == nullptr)
+    {
         return false;
     }
 
-    const auto* blob = static_cast<const float*>(outputLayersInfo[0].buffer);
+    const auto *blob = static_cast<const float *>(outputLayersInfo[0].buffer);
     const float imageWidth = static_cast<float>(networkInfo.width);
     const float imageHeight = static_cast<float>(networkInfo.height);
     std::vector<NvDsInferObjectDetectionInfo> selectedObjects;
@@ -102,14 +158,17 @@ extern "C" bool NvDsInferParseCustomYolo26N(
             ? kNumClasses
             : std::min(configuredClasses, static_cast<unsigned int>(kNumClasses));
 
-    for (unsigned int classId = 0; classId < classCount; ++classId) {
+    for (unsigned int classId = 0; classId < classCount; ++classId)
+    {
         std::vector<NvDsInferObjectDetectionInfo> candidates;
         const float threshold = thresholdForClass(detectionParams, classId);
 
-        for (int anchor = 0; anchor < kNumAnchors; ++anchor) {
+        for (int anchor = 0; anchor < kNumAnchors; ++anchor)
+        {
             const float confidence =
                 blob[(4 + classId) * kNumAnchors + anchor];
-            if (confidence < threshold) {
+            if (confidence < threshold)
+            {
                 continue;
             }
 
@@ -124,7 +183,8 @@ extern "C" bool NvDsInferParseCustomYolo26N(
             top = std::clamp(top, 0.0F, imageHeight);
             width = std::min(width, imageWidth - left);
             height = std::min(height, imageHeight - top);
-            if (width <= 0.0F || height <= 0.0F) {
+            if (width <= 0.0F || height <= 0.0F)
+            {
                 continue;
             }
 
@@ -141,20 +201,24 @@ extern "C" bool NvDsInferParseCustomYolo26N(
         std::sort(
             candidates.begin(),
             candidates.end(),
-            [](const auto& left, const auto& right) {
+            [](const auto &left, const auto &right)
+            {
                 return left.detectionConfidence > right.detectionConfidence;
             });
 
-        for (const auto& candidate : candidates) {
+        for (const auto &candidate : candidates)
+        {
             const bool suppressed = std::any_of(
                 selectedObjects.begin(),
                 selectedObjects.end(),
-                [&candidate](const auto& selected) {
+                [&candidate](const auto &selected)
+                {
                     return selected.classId == candidate.classId &&
-                        intersectionOverUnion(selected, candidate) >
-                            kNmsIouThreshold;
+                           intersectionOverUnion(selected, candidate) >
+                               kNmsIouThreshold;
                 });
-            if (!suppressed) {
+            if (!suppressed)
+            {
                 selectedObjects.push_back(candidate);
             }
         }
@@ -163,16 +227,19 @@ extern "C" bool NvDsInferParseCustomYolo26N(
     std::sort(
         selectedObjects.begin(),
         selectedObjects.end(),
-        [](const auto& left, const auto& right) {
+        [](const auto &left, const auto &right)
+        {
             return left.detectionConfidence > right.detectionConfidence;
         });
-    if (selectedObjects.size() > kKeepTopK) {
+    if (selectedObjects.size() > kKeepTopK)
+    {
         selectedObjects.resize(kKeepTopK);
     }
 
     objectList.insert(
         objectList.end(), selectedObjects.begin(), selectedObjects.end());
-    writeDetections(selectedObjects);
+    const LetterboxParams lb = computeLetterbox(imageWidth, imageHeight);
+    writeDetections(selectedObjects, lb);
     return true;
 }
 

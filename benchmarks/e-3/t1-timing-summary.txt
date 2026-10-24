@@ -1,0 +1,41 @@
+E-3 T1 Gate 2: Pipeline Throughput/Timing Measurement
+======================================================
+Date: 2026-10-24
+Host: ai-host1 (RTX 3090, driver 595.99.02)
+Container: ghcr.io/nvidia/deepstream:9.2-samples-multiarch@sha256:5ee7458d...
+GPU exposure: --gpus all + CUDA_VISIBLE_DEVICES=GPU-facd1ddc-... (owner-approved workaround)
+
+Clip: crosswalk-day-pedestrians.mp4, 1920x1080, H.264, 59.94 FPS, 29.496s, 1768 frames
+
+E-3 (DeepStream + TensorRT YOLO26n):
+  Pipeline wall time: 4.252s (includes ~0.3s model deserialization)
+  Estimated pure processing: ~3.95s
+  Throughput (wall): 415.8 FPS
+  Throughput (processing only): ~447 FPS
+  Per-frame latency (avg, wall): 2.41 ms
+  Speedup vs real-time: 6.9x
+  Detections: 16,848
+
+E-2 (Ultralytics YOLOv8n, GPU, offline batch):
+  Wall time: 22s (from benchmarks/e-2/report.md)
+  Throughput: ~80 FPS
+  Per-frame latency (avg): ~12.5 ms
+  Detections: 16,811
+
+Comparison:
+  E-3 vs E-2 throughput ratio: ~5.2x faster
+  Source: TensorRT FP16 engine + DeepStream optimized decode/inference pipeline
+  Note: E-2 includes Python overhead per frame; E-3 is fully C++/CUDA pipeline
+
+Warm-up:
+  Model deserialization: ~0.29s (from GStreamer log timestamps)
+  First-frame inference: not separately measured (no per-frame timestamps in JSONL)
+  Steady-state: assumed after first batch (batch-size=1, no warm-up frames skipped)
+
+Limitations:
+  - No per-frame inference latency breakdown (DeepStream perf-measurement output
+    not captured; requires active OSD/display element for stats printing)
+  - Wall-clock includes container process startup (~0.5s) and GStreamer pipeline
+    negotiation
+  - Single run; no variance measurement
+  - GPU shared with other workloads (not isolated)

@@ -22,6 +22,10 @@ __pycache__/
 *.pt
 *.engine
 *.onnx
+*.so
+
+# Benchmark detection outputs (large, reproducible).
+benchmarks/**/*.jsonl
 
 # Local scratch and benchmark footage; keep media out of Git.
 /_s*.mp4
