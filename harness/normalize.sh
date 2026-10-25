@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# AVA RTSP harness: one-time video normalization (E-3-T2 / B-019).
+# AVA RTSP harness: one-time video normalization (E-3-T2 / B-019; extended for
+# E-3-T5).
 #
-# Transcodes the four source clips to a uniform H.264 720p @ 10 FPS format
-# under videos/normalized/. Publishers then loop these files with -c copy
-# (no re-encode), keeping generator CPU near zero (ADR-2: no GPU, no
-# generator bottleneck).
+# Produces a uniform H.264 720p @ 10 FPS clip under videos/normalized/ for every
+# camera in the manifest. cam-01..cam-04 are the four distinct source clips;
+# cam-05..cam-50 reuse those same four sources round-robin so capacity points
+# (16/25/50) can be measured without new footage. Publishers then loop these
+# files with -c copy (no re-encode), keeping generator CPU near zero (ADR-2: no
+# GPU, no generator bottleneck).
 #
-# Usage: ./harness/normalize.sh
-#   Run once. Idempotent — skips files that already exist.
+# Usage: ./harness/normalize.sh [N]
+#   N is the number of cameras to normalize (default 50). Idempotent — skips
+#   files that already exist.
 
 set -euo pipefail
 
@@ -17,20 +21,21 @@ FPS=10
 RES=1280x720
 BITRATE=2M
 GOP=30
+NUM_CAMS="${1:-50}"
 
-# camera_id : source_file
-declare -a SOURCES=(
-  "cam-01:crosswalk-day-pedestrians.mp4"
-  "cam-02:intersection-signal-day-vehicles.mp4"
-  "cam-03:intersection-night.mp4"
-  "cam-04:highway-fog-low-visibility.mp4"
+# The four distinct source clips, cycled round-robin across all cameras.
+declare -a SOURCE_FILES=(
+  "crosswalk-day-pedestrians.mp4"
+  "intersection-signal-day-vehicles.mp4"
+  "intersection-night.mp4"
+  "highway-fog-low-visibility.mp4"
 )
 
 mkdir -p "$NORM_DIR"
 
-for entry in "${SOURCES[@]}"; do
-  cam_id="${entry%%:*}"
-  src_file="${entry#*:}"
+for (( n=1; n<=NUM_CAMS; n++ )); do
+  cam_id=$(printf "cam-%02d" "$n")
+  src_file="${SOURCE_FILES[$(( (n - 1) % ${#SOURCE_FILES[@]} ))]}"
   src_path="${VIDEOS_DIR}/${src_file}"
   dst_path="${NORM_DIR}/${cam_id}.mp4"
 

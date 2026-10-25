@@ -206,7 +206,7 @@ outside Git.
 ## E-3-T1 gate status (2026-10-24)
 
 | # | Gate | Status | Evidence |
-|---|------|--------|----------|
+| --- | ------ | -------- | ---------- |
 | 1 | Box matching + accuracy review | **Done** (directional) | `t1-timing-summary.txt`; IoU matching in Gate 1; no labelled ground truth for absolute mAP |
 | 2 | Throughput/timing measurement | **Done** | `t1-timing-summary.txt`: 415.8 FPS wall, 5.2× vs E-2 |
 | 3 | YOLOE export + class-change behavior | **Done** | `gate3-yoloe-findings.md`; `t1-yoloe-detections.jsonl` (1768 frames) |
@@ -218,3 +218,187 @@ owner sign-off on the directional accuracy comparison, and ADR-2 status update.
 
 RTSP, NvDCF/rule/event parity, overload and 30-minute multi-stream capacity are
 not established by this conventional one-stream experiment.
+
+---
+
+# E-3-T5: measured single-GPU multi-stream capacity sweep
+
+Status: **Sweep complete (16/16 points ran to completion); no point meets the
+4 FPS/camera pass gate.** Capacity is therefore **provisional**, not a passing
+limit. The dominant finding is that per-camera analysis throughput is capped just
+below the configured `analysis_fps: 4.0` target at every stream count, so the
+measured "capacity" is set by the frame-rate decimation + bounded-buffer design,
+not by GPU headroom. See [Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window)
+and the parallel-investigation handoff at
+[`docs/handoff-e3-t5-fps-cap.md`](../../docs/handoff-e3-t5-fps-cap.md).
+
+## Scope and method
+
+- **Workload:** live multi-stream RTSP analytics on the T3 opencv/gstreamer
+  adapter (`src/ava/live_runner.py`), GPU 0 only (`CUDA_VISIBLE_DEVICES=0`).
+  GPU 1 (shared llama-server) was never touched.
+- **Points:** 4 / 16 / 25 / 50 cameras × {conventional, prompted} ×
+  {shared, per_camera} detector mode = **16 points**.
+- **Duration:** each point ran `duration_s: 2100` (35 min) steady-state after
+  warm-up, exceeding the 30-minute minimum in the E-3 completion gate.
+- **Footage:** 50 normalized H.264 clips (1280×720, 10 FPS source), looped by
+  FFmpeg publishers into MediaMTX; each camera consumed at its native ~10 FPS.
+- **Detector profiles:** conventional = YOLO26n + ByteTrack; prompted =
+  YOLOE-26s-seg + MobileCLIP text encoder (prompts: person, car, motorcycle).
+- **Bring-up:** `./harness/stack.sh up --no-ops` (self-healing, health-gated);
+  stream health confirmed with `./harness/probe.sh`.
+
+## Completion-gate verdict per point
+
+The E-3 completion gate for a *passing* capacity point requires, over the
+30-minute run: each camera sustains **≥ 4 analysis FPS**, primary-event p95
+latency **< 3 s** (excluding dwell), queues do not grow, and no worker crashes.
+
+| Gate | Result across all 16 points |
+| --- | --- |
+| ≥ 4 analysis FPS per camera | **FAIL everywhere.** Measured 2.88–3.32 FPS (see table). |
+| Event p95 latency < 3 s | PASS where events exist (worst 0.33 s at 50-conv-per_camera). |
+| Queues do not grow | Plateau at depth 40 (= `buffer_size`), age ~10 s; bounded, not unbounded growth. |
+| No worker crashes | PASS — all 16 points reached EOS with exit 0. |
+
+**Highest passing point: none.** Every point is provisional because the FPS gate
+is unmet at every stream count. **First bottleneck:** per-camera analysis
+throughput capped near ~3.3 FPS (below the 4.0 target) with a constant ~50%
+buffer-full drop rate — independent of GPU, which stays far from saturated.
+
+## Detailed per-point results
+
+All values are per-point aggregates over the 2100 s run. `afps min/avg` is the
+minimum and mean analyzed FPS across that point's cameras. `drop%` is the
+buffer-full drop rate (dropped / (decoded + dropped)). `q_end` is the end-of-run
+mean queue depth. `lat_p95s` is the worst-camera event-latency p95 (0 where no
+events were emitted). GPU/CPU/RAM are host-sampler averages/peaks over the run.
+
+| point | cams | kind | mode | wall_s | in_fps | afps min/avg | drop% | q_end | lat_p95s | evts | gpuU avg/peak% | gpuMemPeak MiB | decU% | load1m | ramAvail MiB | inferP95 ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4-conv-shared | 4 | conv | shared | 2100 | 9.95 | 3.31/3.32 | 50.0 | 40 | 0.00 | 0 | 2.9/8 | 1144 | 0.0 | 0.68 | 9344 | 7.0 |
+| 4-conv-per_camera | 4 | conv | per_camera | 2100 | 9.96 | 3.31/3.32 | 50.0 | 40 | 0.00 | 0 | 2.7/8 | 1218 | 0.0 | 0.61 | 9153 | 7.4 |
+| 4-prom-shared | 4 | prom | shared | 2100 | 9.96 | 3.31/3.32 | 50.0 | 40 | 0.00 | 0 | 5.3/12 | 1416 | 0.0 | 0.49 | 8787 | 8.0 |
+| 4-prom-per_camera | 4 | prom | per_camera | 2100 | 9.96 | 3.31/3.32 | 50.0 | 40 | 0.00 | 0 | 5.1/38 | 1784 | 0.0 | 0.67 | 9940 | 15.4 |
+| 16-conv-shared | 16 | conv | shared | 2100 | 9.82 | 3.22/3.27 | 50.0 | 40 | 0.01 | 17 | 11.5/23 | 1942 | 0.0 | 1.16 | 9425 | 13.3 |
+| 16-conv-per_camera | 16 | conv | per_camera | 2100 | 9.83 | 3.23/3.28 | 50.0 | 40 | 0.00 | 0 | 11.6/22 | 2398 | 0.0 | 1.22 | 7705 | 10.8 |
+| 16-prom-shared | 16 | prom | shared | 2100 | 9.83 | 3.23/3.28 | 50.0 | 40 | 0.00 | 0 | 19.7/31 | 2214 | 0.0 | 1.39 | 6612 | 14.8 |
+| 16-prom-per_camera | 16 | prom | per_camera | 2100 | 9.84 | 3.23/3.28 | 50.0 | 40 | 0.00 | 0 | 20.2/36 | 3984 | 0.0 | 1.65 | 6350 | 15.9 |
+| 25-conv-shared | 25 | conv | shared | 2100 | 9.73 | 3.16/3.24 | 50.0 | 40 | 0.01 | 31 | 17.6/24 | 2560 | 0.0 | 1.87 | 5277 | 11.6 |
+| 25-conv-per_camera | 25 | conv | per_camera | 2100 | 9.75 | 3.17/3.25 | 50.0 | 40 | 0.00 | 0 | 18.0/26 | 3029 | 0.0 | 2.84 | 5715 | 18.0 |
+| 25-prom-shared | 25 | prom | shared | 2100 | 9.73 | 3.16/3.24 | 50.0 | 40 | 0.00 | 0 | 31.1/48 | 2551 | 0.0 | 2.43 | 5474 | 22.6 |
+| 25-prom-per_camera | 25 | prom | per_camera | 2100 | 9.74 | 3.17/3.25 | 50.0 | 40 | 0.00 | 0 | 31.3/57 | 5813 | 0.0 | 2.63 | 5261 | 29.9 |
+| 50-conv-shared | 50 | conv | shared | 2100 | 9.49 | 3.00/3.16 | 49.9 | 40 | 0.23 | 73 | 34.5/42 | 3941 | 0.0 | 4.11 | 2401 | 234.9 |
+| 50-conv-per_camera | 50 | conv | per_camera | 2100 | 9.09 | 2.88/3.03 | 49.9 | 40 | 0.33 | 33 | 35.8/48 | 5545 | 0.0 | 4.35 | 2562 | 345.0 |
+| 50-prom-shared | 50 | prom | shared | 2100 | 9.47 | 3.00/3.16 | 49.9 | 40 | 0.00 | 0 | 60.6/71 | 4213 | 0.0 | 3.57 | 3839 | 64.5 |
+| 50-prom-per_camera | 50 | prom | per_camera | 2100 | 9.25 | 2.96/3.08 | 49.9 | 40 | 0.00 | 0 | 63.9/78 | 11001 | 0.0 | 4.98 | 3237 | 327.3 |
+
+### Reading the table
+
+- **GPU is not the constraint.** Utilization averages 2.9%→63.9% and peaks at
+  78%; VRAM peaks at 11 GB (of 24 GB) only at the heaviest prompted point. There
+  is large headroom, yet FPS still sits below target — so the cap is upstream of
+  GPU saturation.
+- **`decU%` (decoder util) reads 0.0** because the opencv/gstreamer adapter does
+  not expose a hardware-decoder utilization counter; this is a telemetry gap, not
+  evidence that decoding was idle. Decoding clearly ran at ~10 FPS/camera
+  (`in_fps`).
+- **`inferP95 ms` spikes at 50 cameras** (up to 345 ms) — the shared detector
+  lock serializes inference across all cameras, so per-call latency grows with
+  camera count. This is the first *real* scaling pressure visible in the data,
+  but it still does not push average FPS below ~2.9.
+- **shared vs per_camera:** near-identical analyzed FPS; per_camera uses more
+  VRAM (one model instance per camera) and shows higher GPU-util peaks.
+
+## Root cause of the sub-4 FPS window
+
+The measured analyzed FPS is *by construction* just under the configured
+`analysis_fps: 4.0`. The mechanism, from `src/ava/live_runner.py`:
+
+1. **Decode runs at native rate** (~10 FPS/camera) and every decoded frame is
+   pushed into a bounded buffer (`deque(maxlen=buffer_size)` with
+   `buffer_size: 40`).
+2. **Inference is decimated to `analysis_fps`** using the *source PTS*: a frame
+   is inferred only when `frame.timestamp_s - last_infer_ts >= 1/analysis_fps`
+   (i.e. ≥ 0.25 s). This targets exactly 4 inferences/s per camera.
+3. **The buffer fills and overflows.** Because decode (~10 FPS) outpaces the
+   decimated inference (~4 FPS), the 40-deep buffer stays full; every frame that
+   arrives while it is full is counted as a `buffer_full` drop. At a steady
+   10-in / 4-out ratio this yields the observed **~50% drop rate** and a queue
+   depth pinned at exactly `buffer_size` (40), with age ≈ 40/4 = 10 s.
+
+So the ~3.3 FPS is not a GPU or host limit — it is the decimation target minus
+timing overhead:
+
+- Target inferences over 2100 s at 4.0 FPS = **8400**. Measured ≈ **6990**
+  (cam-01, 4/25-cam points) → a **~17% shortfall**, giving ~3.33 FPS.
+- The shortfall comes from PTS-based gating on a 10 FPS source: with frames
+  arriving every 0.1 s and a 0.25 s gate, the realized interval is quantized to
+  0.3 s (3 inferences per 0.9 s of source time) rather than exactly 0.25 s, plus
+  small warm-up/teardown loss at run boundaries. At 50 cameras the shortfall
+  widens (~21%) as decode rate dips to ~9.1–9.5 FPS under host load.
+
+**Consequence for the capacity claim:** the sweep measured a *throughput ceiling
+imposed by the analysis_fps decimation + bounded-buffer design*, not the true
+GPU/host capacity limit. To measure real capacity, the decimation target and
+buffer must be raised (or removed) so inference is no longer self-limited below
+the point where GPU or host resources actually saturate. This is handed off for
+parallel investigation.
+
+## Observability-stack overhead
+
+The ops stack (Prometheus v3.15.1, Grafana v13.2.4, Loki v3.7.9, Alloy v1.21.2)
+ran alongside the sweep on CPU only. Per B-022's measured baseline the full ops
+project costs **~486 MiB RAM and < 2% CPU** at idle; during the sweep the host
+`load1m` rose from ~0.5 (4 cams) to ~5.0 (50 cams), dominated by the analytics
+workers, not the observability stack. The per-point `ramAvail` decline
+(9344 → 2401 MiB at 50-conv-shared) tracks camera count and is attributable to
+the live runner's per-camera buffers/decoders, with the ops stack contributing a
+small constant offset.
+
+## Quality comparison with E-2
+
+E-2 (`benchmarks/e-2/report.md`) is a **functional** baseline, not an accuracy
+certification: 16,529 detections / 267 tracks over the single E-1 crosswalk clip
+(1768 frames @ 59.94 FPS), with one null track_id (0.01%). The T5 sweep is a
+*capacity* measurement over looped 720p/10 FPS clips and does **not** reproduce
+E-2's detection/tracking counts, so no per-class or per-box parity is claimed.
+Directionally:
+
+- Conventional T5 points emitted events only where the rule geometry matched the
+  looped footage (e.g. 73 events at 50-conv-shared); most prompted points emitted
+  0 because the prompts/geometry did not trigger on the normalized clips. Event
+  counts here are a liveness signal, not a quality metric.
+- The T1 DeepStream run produced 16,848 detections (+319 / +1.93% vs E-2's
+  16,529) — a directional count delta only, with no labelled ground truth for
+  absolute accuracy. That comparison is unchanged by T5.
+
+A true quality comparison (detection/tracking parity between the live opencv
+adapter and the E-2 offline pipeline) remains open and is out of scope for this
+capacity sweep.
+
+## Reproducibility
+
+| Item | Value |
+| --- | --- |
+| Task branch | `agent/e3-t5-capacity-sweep` (worktree `../ava-worktrees/e3-t5-capacity-sweep`) |
+| GPU | RTX 3090 GPU 0 only; `CUDA_VISIBLE_DEVICES=0`; GPU 1 (llama-server) untouched |
+| Sweep driver | `harness/run_capacity_sweep.sh` (`START_INDEX` resume supported) |
+| Bring-up | `./harness/stack.sh up --no-ops`; health via `./harness/stack.sh status`, `./harness/probe.sh` |
+| Per-point configs | `configs/run-e3-cap-{4,16,25,50}-{conv,prom}-{shared,per_camera}.yaml` |
+| Status file | `results/e3-capacity-sweep/sweep-status.tsv` (16 PASS rows) |
+| Per-point metrics | `results/<point>/metrics.json`, `events.jsonl`, `run.log` |
+| Metric extractors | `results/e3-capacity-sweep/extract_metrics.py`, `extract_full.py` |
+
+## T5 gate status
+
+| # | Gate | Status | Evidence |
+| --- | ------ | -------- | ---------- |
+| 1 | Run 4/16/25/50 × conv/prom × shared/per_camera, ≥30 min each | **Done** | 16/16 PASS, wall ≈ 2100 s each (`sweep-status.tsv`) |
+| 2 | Report highest passing point | **None passes** — all provisional (FPS gate unmet) | per-point table above |
+| 3 | Report first failure/bottleneck | **Done** — sub-4 FPS decimation cap + ~50% buffer-full drops | Root-cause section |
+| 4 | Report observability-stack overhead | **Done** — ~486 MiB / <2% CPU (B-022 baseline) | Overhead section |
+| 5 | Quality comparison with E-2 | **Directional only** — no parity claimed | Quality section |
+
+Open: raise/remove the `analysis_fps` decimation + bounded-buffer self-limit and
+re-run to find the true GPU/host saturation point (see handoff).

@@ -60,6 +60,7 @@ packaging==26.3
 pillow==13.0.0
 polars==2.0.0
 polars-runtime-32==2.0.0
+prometheus_client==0.26.0
 psutil==7.2.2
 pydantic==2.14.1
 pydantic_core==2.50.1

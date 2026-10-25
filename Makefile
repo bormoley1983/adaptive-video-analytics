@@ -2,7 +2,7 @@ PYTHON ?= python3
 PYTEST := $(PYTHON) -m pytest
 DEV_IMAGE ?= ava/dev:local
 
-.PHONY: help install-dev dev-image lint test test-unit test-integration test-e2e test-infra test-coverage lint-docker test-coverage-docker
+.PHONY: help install-dev dev-image lint test test-unit test-integration test-e2e test-infra test-coverage lint-docker test-coverage-docker up down status probe
 
 help:
 	@echo "install-dev       Install the package and test harness"
@@ -15,6 +15,25 @@ help:
 	@echo "dev-image         Build the dev image (inference stack + test tooling)"
 	@echo "lint-docker       Run ruff in the dev image"
 	@echo "test-coverage-docker  Run the coverage gate in the dev image"
+	@echo "up [N=]           Bring up the full study stack (harness + ops); N = camera count"
+	@echo "down              Tear down the study stack (volumes preserved)"
+	@echo "status            One-screen health table for the study stack"
+	@echo "probe             Probe all harness RTSP streams (codec/res/FPS/rate)"
+
+# Study-stack lifecycle (E-3-T5). Thin wrappers over harness/stack.sh, which is
+# idempotent and self-healing: it starts MediaMTX first, waits for health, then
+# force-recreates any publisher left stuck in `Exited` after a reboot.
+up:
+	./harness/stack.sh up $(N)
+
+down:
+	./harness/stack.sh down
+
+status:
+	./harness/stack.sh status
+
+probe:
+	./harness/probe.sh
 
 install-dev:
 	$(PYTHON) -m pip install -e '.[dev]'

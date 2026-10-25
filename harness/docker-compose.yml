@@ -1,4 +1,4 @@
-# AVA RTSP replay harness (E-3-T2 / B-019).
+# AVA RTSP replay harness (E-3-T2 / B-019; extended for E-3-T5).
 #
 # Standalone CPU-only Compose project (ADR-2): one MediaMTX server plus one
 # independent FFmpeg publisher per emulated camera. Publishers loop pre-
@@ -39,6 +39,18 @@ services:
     ports:
       # Local bind only (ADR-2): probe from the host via 127.0.0.1.
       - "127.0.0.1:8554:8554"
+    healthcheck:
+      # The binary lives at /mediamtx (the image entrypoint); it is not on
+      # $PATH, so use the absolute path. `--version` (double dash) exits 0;
+      # the single-dash `-version` prints usage and exits 80. A successful run
+      # plus the process staying up is the readiness signal; stack.sh gates
+      # publisher start on this so publishers never crash-loop on an
+      # unresolved hostname.
+      test: ["CMD", "/mediamtx", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
   ava-cam-01:
     <<: *publisher-defaults
@@ -87,3 +99,509 @@ services:
       -re -stream_loop -1 -i /footage/normalized/cam-04.mp4
       -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
       rtsp://ava-mediamtx:8554/cam-04
+
+  ava-cam-05:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-05
+      - RTSP_PATH=/cam-05
+      - SOURCE_FILE=normalized/cam-05.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-05.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-05
+
+  ava-cam-06:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-06
+      - RTSP_PATH=/cam-06
+      - SOURCE_FILE=normalized/cam-06.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-06.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-06
+
+  ava-cam-07:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-07
+      - RTSP_PATH=/cam-07
+      - SOURCE_FILE=normalized/cam-07.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-07.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-07
+
+  ava-cam-08:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-08
+      - RTSP_PATH=/cam-08
+      - SOURCE_FILE=normalized/cam-08.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-08.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-08
+
+  ava-cam-09:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-09
+      - RTSP_PATH=/cam-09
+      - SOURCE_FILE=normalized/cam-09.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-09.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-09
+
+  ava-cam-10:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-10
+      - RTSP_PATH=/cam-10
+      - SOURCE_FILE=normalized/cam-10.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-10.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-10
+
+  ava-cam-11:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-11
+      - RTSP_PATH=/cam-11
+      - SOURCE_FILE=normalized/cam-11.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-11.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-11
+
+  ava-cam-12:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-12
+      - RTSP_PATH=/cam-12
+      - SOURCE_FILE=normalized/cam-12.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-12.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-12
+
+  ava-cam-13:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-13
+      - RTSP_PATH=/cam-13
+      - SOURCE_FILE=normalized/cam-13.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-13.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-13
+
+  ava-cam-14:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-14
+      - RTSP_PATH=/cam-14
+      - SOURCE_FILE=normalized/cam-14.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-14.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-14
+
+  ava-cam-15:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-15
+      - RTSP_PATH=/cam-15
+      - SOURCE_FILE=normalized/cam-15.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-15.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-15
+
+  ava-cam-16:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-16
+      - RTSP_PATH=/cam-16
+      - SOURCE_FILE=normalized/cam-16.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-16.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-16
+
+  ava-cam-17:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-17
+      - RTSP_PATH=/cam-17
+      - SOURCE_FILE=normalized/cam-17.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-17.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-17
+
+  ava-cam-18:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-18
+      - RTSP_PATH=/cam-18
+      - SOURCE_FILE=normalized/cam-18.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-18.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-18
+
+  ava-cam-19:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-19
+      - RTSP_PATH=/cam-19
+      - SOURCE_FILE=normalized/cam-19.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-19.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-19
+
+  ava-cam-20:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-20
+      - RTSP_PATH=/cam-20
+      - SOURCE_FILE=normalized/cam-20.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-20.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-20
+
+  ava-cam-21:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-21
+      - RTSP_PATH=/cam-21
+      - SOURCE_FILE=normalized/cam-21.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-21.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-21
+
+  ava-cam-22:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-22
+      - RTSP_PATH=/cam-22
+      - SOURCE_FILE=normalized/cam-22.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-22.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-22
+
+  ava-cam-23:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-23
+      - RTSP_PATH=/cam-23
+      - SOURCE_FILE=normalized/cam-23.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-23.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-23
+
+  ava-cam-24:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-24
+      - RTSP_PATH=/cam-24
+      - SOURCE_FILE=normalized/cam-24.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-24.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-24
+
+  ava-cam-25:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-25
+      - RTSP_PATH=/cam-25
+      - SOURCE_FILE=normalized/cam-25.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-25.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-25
+
+  ava-cam-26:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-26
+      - RTSP_PATH=/cam-26
+      - SOURCE_FILE=normalized/cam-26.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-26.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-26
+
+  ava-cam-27:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-27
+      - RTSP_PATH=/cam-27
+      - SOURCE_FILE=normalized/cam-27.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-27.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-27
+
+  ava-cam-28:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-28
+      - RTSP_PATH=/cam-28
+      - SOURCE_FILE=normalized/cam-28.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-28.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-28
+
+  ava-cam-29:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-29
+      - RTSP_PATH=/cam-29
+      - SOURCE_FILE=normalized/cam-29.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-29.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-29
+
+  ava-cam-30:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-30
+      - RTSP_PATH=/cam-30
+      - SOURCE_FILE=normalized/cam-30.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-30.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-30
+
+  ava-cam-31:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-31
+      - RTSP_PATH=/cam-31
+      - SOURCE_FILE=normalized/cam-31.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-31.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-31
+
+  ava-cam-32:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-32
+      - RTSP_PATH=/cam-32
+      - SOURCE_FILE=normalized/cam-32.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-32.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-32
+
+  ava-cam-33:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-33
+      - RTSP_PATH=/cam-33
+      - SOURCE_FILE=normalized/cam-33.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-33.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-33
+
+  ava-cam-34:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-34
+      - RTSP_PATH=/cam-34
+      - SOURCE_FILE=normalized/cam-34.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-34.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-34
+
+  ava-cam-35:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-35
+      - RTSP_PATH=/cam-35
+      - SOURCE_FILE=normalized/cam-35.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-35.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-35
+
+  ava-cam-36:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-36
+      - RTSP_PATH=/cam-36
+      - SOURCE_FILE=normalized/cam-36.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-36.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-36
+
+  ava-cam-37:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-37
+      - RTSP_PATH=/cam-37
+      - SOURCE_FILE=normalized/cam-37.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-37.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-37
+
+  ava-cam-38:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-38
+      - RTSP_PATH=/cam-38
+      - SOURCE_FILE=normalized/cam-38.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-38.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-38
+
+  ava-cam-39:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-39
+      - RTSP_PATH=/cam-39
+      - SOURCE_FILE=normalized/cam-39.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-39.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-39
+
+  ava-cam-40:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-40
+      - RTSP_PATH=/cam-40
+      - SOURCE_FILE=normalized/cam-40.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-40.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-40
+
+  ava-cam-41:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-41
+      - RTSP_PATH=/cam-41
+      - SOURCE_FILE=normalized/cam-41.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-41.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-41
+
+  ava-cam-42:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-42
+      - RTSP_PATH=/cam-42
+      - SOURCE_FILE=normalized/cam-42.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-42.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-42
+
+  ava-cam-43:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-43
+      - RTSP_PATH=/cam-43
+      - SOURCE_FILE=normalized/cam-43.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-43.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-43
+
+  ava-cam-44:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-44
+      - RTSP_PATH=/cam-44
+      - SOURCE_FILE=normalized/cam-44.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-44.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-44
+
+  ava-cam-45:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-45
+      - RTSP_PATH=/cam-45
+      - SOURCE_FILE=normalized/cam-45.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-45.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-45
+
+  ava-cam-46:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-46
+      - RTSP_PATH=/cam-46
+      - SOURCE_FILE=normalized/cam-46.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-46.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-46
+
+  ava-cam-47:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-47
+      - RTSP_PATH=/cam-47
+      - SOURCE_FILE=normalized/cam-47.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-47.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-47
+
+  ava-cam-48:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-48
+      - RTSP_PATH=/cam-48
+      - SOURCE_FILE=normalized/cam-48.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-48.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-48
+
+  ava-cam-49:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-49
+      - RTSP_PATH=/cam-49
+      - SOURCE_FILE=normalized/cam-49.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-49.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-49
+
+  ava-cam-50:
+    <<: *publisher-defaults
+    environment:
+      - CAM_ID=cam-50
+      - RTSP_PATH=/cam-50
+      - SOURCE_FILE=normalized/cam-50.mp4
+    command: >-
+      -re -stream_loop -1 -i /footage/normalized/cam-50.mp4
+      -map 0:v:0 -c:v copy -an -rtsp_transport tcp -f rtsp
+      rtsp://ava-mediamtx:8554/cam-50
