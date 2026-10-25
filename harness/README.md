@@ -6,6 +6,57 @@ publisher per emulated camera. Publishers loop existing recordings mounted
 read-only, re-encode to a uniform H.264 720p @ 10 FPS stream, and publish to a
 stable RTSP path (ADR-2).
 
+## Bring up the full study stack (one command)
+
+`harness/stack.sh` is the single idempotent entry point for the whole local
+study stack — system prereqs, footage, MediaMTX, N publishers, and the
+observability platform (Prometheus/Loki/Alloy/Grafana). It is safe to re-run:
+it converges to a known-good state instead of double-starting anything.
+
+```bash
+make up                 # full stack, all cameras defined in compose
+make up N=16            # only the first 16 cameras
+./harness/stack.sh up --no-ops   # harness only, skip observability
+make status             # one-screen health table (cams, mediamtx, ops, GPU)
+make probe              # verify streams: codec / resolution / FPS / rate
+make down               # ordered teardown (volumes preserved)
+```
+
+### Why a single script (the reboot story)
+
+The publishers depend on MediaMTX by hostname. If the RTSP server is not up
+when they start (e.g. right after a host reboot), each publisher crash-loops on
+DNS and **exhausts its `on-failure` restart budget**, leaving it stuck in
+`Exited` — it will no longer auto-recover, and a plain `docker compose up -d`
+will not restart it. This is exactly what happened after a scheduled shutdown:
+46 of 50 publishers were left dead.
+
+`stack.sh up` avoids and repairs this by:
+
+1. **Starting MediaMTX first** and polling its healthcheck until it is `healthy`.
+2. **Then** starting the publishers, so the hostname always resolves.
+3. **Self-healing**: any publisher not `Up` (including restart-exhausted
+   `Exited` ones) is `--force-recreate`d, then the script polls until all N are
+   `Up`.
+
+So after any reboot or partial outage, one `make up` converges the whole stack.
+
+### Camera count
+
+The camera list is derived from `manifest.yaml` / `docker-compose.yml`, so the
+script and `probe.sh` always match the harness size (4 on `develop`, 50 in the
+E-3-T5 worktree). To scale to a new count (e.g. 100), add the matching entries
+to both files, then `make up N=100`.
+
+### Observability prerequisites
+
+`stack.sh up` starts the ops stack too and creates `ops/.env` from
+`ops/.env.example` if missing. Set a real `GRAFANA_ADMIN_PASSWORD` in
+`ops/.env` before relying on Grafana. Use `--no-ops` (or run the harness
+compose directly) for pure capacity runs that don't need dashboards.
+
+## Files
+
 ## Topology
 
 ```
@@ -28,9 +79,10 @@ harness) is manageable as one group.
 
 | File | Purpose |
 | --- | --- |
-| `docker-compose.yml` | MediaMTX + 4 FFmpeg publishers, pinned by digest |
-| `mediamtx.yml` | MediaMTX config: 4 paths, local bind, no auth |
-| `manifest.yaml` | Deterministic camera→source map + target rates |
+| `stack.sh` | Single idempotent, self-healing bring-up for the full study stack (`up`/`down`/`status`) |
+| `docker-compose.yml` | MediaMTX + N FFmpeg publishers, pinned by digest |
+| `mediamtx.yml` | MediaMTX config: one path per camera, local bind, no auth |
+| `manifest.yaml` | Deterministic camera→source map + target rates (drives camera count) |
 | `probe.sh` | Acceptance script: probe all streams, verify codec/res/FPS/rate |
 
 ## Usage

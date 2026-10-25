@@ -1,7 +1,6 @@
-# MediaMTX configuration for the AVA RTSP replay harness (E-3-T2 / B-019).
-#
-# CPU-only, local bind only. No GPU, no public exposure (ADR-2).
-# Four paths, one per emulated camera publisher.
+# MediaMTX configuration for the AVA RTSP replay harness (E-3-T2 / B-019;
+# extended for E-3-T5). CPU-only, local bind only. No GPU, no public exposure
+# (ADR-2). One path per emulated camera publisher (cam-01..cam-50).
 
 logLevel: info
 
@@ -20,15 +19,103 @@ rtspAuthMethods: [basic]
 rtspTransports: [tcp]
 
 paths:
-  # cam-01: crosswalk-day-pedestrians (people/vehicle baseline)
   cam-01:
     source: publisher
-  # cam-02: intersection-signal-day-vehicles (daytime signal)
   cam-02:
     source: publisher
-  # cam-03: intersection-night (night traffic)
   cam-03:
     source: publisher
-  # cam-04: highway-fog-low-visibility (low-visibility stress)
   cam-04:
+    source: publisher
+  cam-05:
+    source: publisher
+  cam-06:
+    source: publisher
+  cam-07:
+    source: publisher
+  cam-08:
+    source: publisher
+  cam-09:
+    source: publisher
+  cam-10:
+    source: publisher
+  cam-11:
+    source: publisher
+  cam-12:
+    source: publisher
+  cam-13:
+    source: publisher
+  cam-14:
+    source: publisher
+  cam-15:
+    source: publisher
+  cam-16:
+    source: publisher
+  cam-17:
+    source: publisher
+  cam-18:
+    source: publisher
+  cam-19:
+    source: publisher
+  cam-20:
+    source: publisher
+  cam-21:
+    source: publisher
+  cam-22:
+    source: publisher
+  cam-23:
+    source: publisher
+  cam-24:
+    source: publisher
+  cam-25:
+    source: publisher
+  cam-26:
+    source: publisher
+  cam-27:
+    source: publisher
+  cam-28:
+    source: publisher
+  cam-29:
+    source: publisher
+  cam-30:
+    source: publisher
+  cam-31:
+    source: publisher
+  cam-32:
+    source: publisher
+  cam-33:
+    source: publisher
+  cam-34:
+    source: publisher
+  cam-35:
+    source: publisher
+  cam-36:
+    source: publisher
+  cam-37:
+    source: publisher
+  cam-38:
+    source: publisher
+  cam-39:
+    source: publisher
+  cam-40:
+    source: publisher
+  cam-41:
+    source: publisher
+  cam-42:
+    source: publisher
+  cam-43:
+    source: publisher
+  cam-44:
+    source: publisher
+  cam-45:
+    source: publisher
+  cam-46:
+    source: publisher
+  cam-47:
+    source: publisher
+  cam-48:
+    source: publisher
+  cam-49:
+    source: publisher
+  cam-50:
     source: publisher

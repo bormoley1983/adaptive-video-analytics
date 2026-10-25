@@ -1,0 +1,169 @@
+# E-3-T5 capacity sweep: 25 streams, conventional profile, per_camera detector mode.
+#
+# Prerequisites:
+#   ./harness/normalize.sh
+#   docker compose -f harness/docker-compose.yml up -d
+#   docker compose -f ops/docker-compose.yml up -d   # dashboard + overhead capture
+#
+# Run (>= 30 min steady-state after warm-up):
+#   ava live --config configs/run-e3-cap-25-conv-per_camera.yaml --gpu 0
+
+detector:
+  kind: conventional
+  model: models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5
+gpu: "0"
+output_dir: results/e3-cap-25-conv-per_camera
+
+live:
+  backend: opencv
+  detector_mode: per_camera
+  buffer_size: 40
+  reconnect_max: 3
+  reconnect_delay_s: 1.0
+  duration_s: 2100
+
+  telemetry:
+    prometheus_port: 9464
+    prometheus_host: "0.0.0.0"
+
+  cameras:
+    - id: cam-01
+      url: rtsp://127.0.0.1:8554/cam-01
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-02
+      url: rtsp://127.0.0.1:8554/cam-02
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-03
+      url: rtsp://127.0.0.1:8554/cam-03
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-04
+      url: rtsp://127.0.0.1:8554/cam-04
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-05
+      url: rtsp://127.0.0.1:8554/cam-05
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-06
+      url: rtsp://127.0.0.1:8554/cam-06
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-07
+      url: rtsp://127.0.0.1:8554/cam-07
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-08
+      url: rtsp://127.0.0.1:8554/cam-08
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-09
+      url: rtsp://127.0.0.1:8554/cam-09
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-10
+      url: rtsp://127.0.0.1:8554/cam-10
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-11
+      url: rtsp://127.0.0.1:8554/cam-11
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-12
+      url: rtsp://127.0.0.1:8554/cam-12
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-13
+      url: rtsp://127.0.0.1:8554/cam-13
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-14
+      url: rtsp://127.0.0.1:8554/cam-14
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-15
+      url: rtsp://127.0.0.1:8554/cam-15
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-16
+      url: rtsp://127.0.0.1:8554/cam-16
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-17
+      url: rtsp://127.0.0.1:8554/cam-17
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-18
+      url: rtsp://127.0.0.1:8554/cam-18
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-19
+      url: rtsp://127.0.0.1:8554/cam-19
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-20
+      url: rtsp://127.0.0.1:8554/cam-20
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-21
+      url: rtsp://127.0.0.1:8554/cam-21
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+    - id: cam-22
+      url: rtsp://127.0.0.1:8554/cam-22
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-23
+      url: rtsp://127.0.0.1:8554/cam-23
+      profiles: [intersection]
+      analysis_fps: 4.0
+    - id: cam-24
+      url: rtsp://127.0.0.1:8554/cam-24
+      profiles: [highway]
+      analysis_fps: 4.0
+    - id: cam-25
+      url: rtsp://127.0.0.1:8554/cam-25
+      profiles: [crosswalk]
+      analysis_fps: 4.0
+
+  profiles:
+    - id: crosswalk
+      description: Pedestrian line crossing at the crosswalk
+      rules:
+        - id: ped-crossing
+          type: line_crossing
+          line:
+            start: [0.0, 0.5]
+            end: [1.0, 0.5]
+          direction: both
+          classes:
+            include: [person]
+          deadband: 0.02
+          debounce_frames: 3
+
+    - id: intersection
+      description: Vehicle presence in the intersection zone
+      rules:
+        - id: vehicle-zone
+          type: zone_entry
+          zone:
+            points: [[0.2, 0.3], [0.8, 0.3], [0.8, 0.7], [0.2, 0.7]]
+          classes:
+            include: [car, motorcycle]
+          debounce_frames: 2
+
+    - id: highway
+      description: Vehicle dwell on the highway (low-visibility conditions)
+      rules:
+        - id: vehicle-dwell
+          type: dwell
+          zone:
+            points: [[0.1, 0.4], [0.9, 0.4], [0.9, 0.8], [0.1, 0.8]]
+          classes:
+            include: [car]
+          dwell_seconds: 5.0
+          missing_track_grace_s: 2.0

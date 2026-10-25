@@ -1,9 +1,10 @@
-# AVA RTSP replay harness manifest (E-3-T2 / B-019).
+# AVA RTSP replay harness manifest (E-3-T2 / B-019; extended for E-3-T5).
 #
-# Deterministic camera-to-source mapping. Extensible to 16, 25, 50 streams by
-# adding entries following the same pattern. Each publisher re-encodes its
-# source clip to a uniform H.264 720p @ 10 FPS stream for consistent capacity
-# measurement (ADR-2).
+# Deterministic camera-to-source mapping. cam-01..cam-04 are the original
+# four distinct clips; cam-05..cam-50 reuse those same four sources in a
+# round-robin so capacity points (16/25/50) can be measured without new
+# footage. Each publisher re-encodes its source clip to a uniform H.264 720p
+# @ 10 FPS stream for consistent capacity measurement (ADR-2).
 
 version: 1
 target:
@@ -17,16 +18,200 @@ cameras:
   - id: cam-01
     source: crosswalk-day-pedestrians.mp4
     rtsp_path: /cam-01
-    description: Daytime crosswalk, people/vehicle baseline
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
   - id: cam-02
     source: intersection-signal-day-vehicles.mp4
     rtsp_path: /cam-02
-    description: Signalized intersection, daytime vehicles
+    description: Signalized intersection, daytime vehicles (capacity stream)
   - id: cam-03
     source: intersection-night.mp4
     rtsp_path: /cam-03
-    description: Wide urban intersection at night
+    description: Wide urban intersection at night (capacity stream)
   - id: cam-04
     source: highway-fog-low-visibility.mp4
     rtsp_path: /cam-04
-    description: Multi-lane highway in dense fog
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-05
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-05
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-06
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-06
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-07
+    source: intersection-night.mp4
+    rtsp_path: /cam-07
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-08
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-08
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-09
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-09
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-10
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-10
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-11
+    source: intersection-night.mp4
+    rtsp_path: /cam-11
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-12
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-12
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-13
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-13
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-14
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-14
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-15
+    source: intersection-night.mp4
+    rtsp_path: /cam-15
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-16
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-16
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-17
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-17
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-18
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-18
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-19
+    source: intersection-night.mp4
+    rtsp_path: /cam-19
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-20
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-20
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-21
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-21
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-22
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-22
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-23
+    source: intersection-night.mp4
+    rtsp_path: /cam-23
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-24
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-24
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-25
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-25
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-26
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-26
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-27
+    source: intersection-night.mp4
+    rtsp_path: /cam-27
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-28
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-28
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-29
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-29
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-30
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-30
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-31
+    source: intersection-night.mp4
+    rtsp_path: /cam-31
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-32
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-32
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-33
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-33
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-34
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-34
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-35
+    source: intersection-night.mp4
+    rtsp_path: /cam-35
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-36
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-36
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-37
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-37
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-38
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-38
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-39
+    source: intersection-night.mp4
+    rtsp_path: /cam-39
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-40
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-40
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-41
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-41
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-42
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-42
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-43
+    source: intersection-night.mp4
+    rtsp_path: /cam-43
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-44
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-44
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-45
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-45
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-46
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-46
+    description: Signalized intersection, daytime vehicles (capacity stream)
+  - id: cam-47
+    source: intersection-night.mp4
+    rtsp_path: /cam-47
+    description: Wide urban intersection at night (capacity stream)
+  - id: cam-48
+    source: highway-fog-low-visibility.mp4
+    rtsp_path: /cam-48
+    description: Multi-lane highway in dense fog (capacity stream)
+  - id: cam-49
+    source: crosswalk-day-pedestrians.mp4
+    rtsp_path: /cam-49
+    description: Daytime crosswalk, people/vehicle baseline (capacity stream)
+  - id: cam-50
+    source: intersection-signal-day-vehicles.mp4
+    rtsp_path: /cam-50
+    description: Signalized intersection, daytime vehicles (capacity stream)

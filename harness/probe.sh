@@ -6,20 +6,43 @@
 #   2. Each stream is H.264, 1280x720, ~10 FPS.
 #   3. Sustained input rate over a short window (no generator bottleneck).
 #
-# Usage: ./harness/probe.sh [RTSP_HOST]
+# Usage: ./harness/probe.sh [RTSP_HOST] [N]
 #   RTSP_HOST defaults to 127.0.0.1
+#   N         number of cameras to probe (default: all in manifest.yaml).
+#             The camera list is derived from harness/manifest.yaml so the
+#             probe always matches the harness, whatever its size.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST="${SCRIPT_DIR}/manifest.yaml"
+
 HOST="${1:-127.0.0.1}"
+COUNT="${2:-0}"
 PORT=8554
-CAMERAS=(cam-01 cam-02 cam-03 cam-04)
+
+# Derive the camera list from the manifest (id: cam-NN lines), in file order.
+CAMERAS=()
+while IFS= read -r id; do
+  CAMERAS+=("${id}")
+done < <(grep -oP '^\s*-\s+id:\s*\K\S+' "${MANIFEST}" 2>/dev/null || true)
+
+if (( ${#CAMERAS[@]} == 0 )); then
+  echo "FAIL: could not derive camera list from ${MANIFEST}" >&2
+  exit 1
+fi
+
+# Optional count limit (probe only the first N).
+if (( COUNT > 0 && COUNT < ${#CAMERAS[@]} )); then
+  CAMERAS=("${CAMERAS[@]:0:COUNT}")
+fi
+
 EXPECTED_W=1280
 EXPECTED_H=720
 EXPECTED_FPS=10
 PROBE_SECONDS=5
 
-echo "=== AVA RTSP harness probe: ${HOST}:${PORT} ==="
+echo "=== AVA RTSP harness probe: ${HOST}:${PORT} (${#CAMERAS[@]} cameras) ==="
 overall_ok=true
 
 for cam in "${CAMERAS[@]}"; do
