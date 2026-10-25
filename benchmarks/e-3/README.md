@@ -1,8 +1,12 @@
-# DeepStream compatibility experiment
+# E-3 compatibility and capacity evidence
 
-The [report](report.md) records a successful conventional YOLO26n one-stream
-run: 1,768 frame records, 16,848 detections and EOS. T1 remains open for the
-other model and acceptance gates.
+The [report](report.md) records the DeepStream compatibility gates and the
+provisional E-3-T5 live capacity sweep. The 16 sweep points completed, but none
+is a passing capacity point. The original relative PTS gate explains the
+approximately 3.33 FPS result at a 4 FPS target; the old drop, queue-age and
+event-latency outputs are retained only as invalid historical measurements.
+The report also records short corrected-flow diagnostics at 4 and 10 FPS per
+camera; both met their targets without queue drops or worker errors.
 
 ## Device visibility
 

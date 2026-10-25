@@ -75,6 +75,19 @@ class TestCameraMetrics:
         cm.record_decode()
         assert cm.frames_decoded == 2
 
+    def test_measurement_window_starts_on_first_decode_and_stops_on_finish(
+        self, monkeypatch
+    ) -> None:
+        clock = iter([10.0, 20.0, 30.0])
+        monkeypatch.setattr("ava.live_metrics.time.monotonic", lambda: next(clock))
+        cm = CameraMetrics(camera_id="c")
+
+        cm.record_decode()
+        cm.finish()
+
+        assert cm.measurement_seconds == pytest.approx(10.0)
+        assert cm.input_fps == pytest.approx(0.1)
+
     def test_record_inference(self) -> None:
         cm = CameraMetrics(camera_id="c")
         cm.record_inference(0.05)
@@ -128,6 +141,7 @@ class TestCameraMetrics:
         assert d["camera_id"] == "cam-01"
         assert d["frames_decoded"] == 1
         assert d["frames_inferred"] == 1
+        assert "measurement_seconds" in d
         assert d["events_emitted"] == 1
         assert "inference_timing" in d
         assert "event_latency" in d

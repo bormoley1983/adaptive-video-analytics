@@ -365,7 +365,8 @@ class LiveRunConfig(BaseModel):
     # Detector sharing mode: "shared" (one model, serialized inference) or
     # "per_camera" (one model per camera, parallel inference).
     detector_mode: Literal["shared", "per_camera"] = "shared"
-    # Per-camera frame buffer size (frames held for evidence / recent history).
+    # Per-camera processing queue. On overflow the oldest queued frame is
+    # dropped so live analysis does not accumulate unbounded latency.
     buffer_size: int = Field(30, ge=1)
     # Maximum reconnect attempts per camera before giving up.
     reconnect_max: int = Field(3, ge=0)

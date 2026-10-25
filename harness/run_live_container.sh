@@ -15,6 +15,11 @@
 # Usage:
 #   ./harness/run_live_container.sh <config.yaml> [duration_s]
 #
+# Optional environment overrides create a temporary config and leave the
+# committed benchmark manifest unchanged:
+#   AVA_ANALYSIS_FPS=<fps>       set every camera's analysis target
+#   AVA_OUTPUT_DIR=<results/...> write to a distinct results directory
+#
 # Example:
 #   ./harness/run_live_container.sh configs/run-e3-cap-4-conv-shared.yaml 90
 #
@@ -25,9 +30,11 @@ set -euo pipefail
 
 CONFIG="${1:?usage: run_live_container.sh <config.yaml> [duration_s]}"
 DURATION_S="${2:-}"
+ANALYSIS_FPS="${AVA_ANALYSIS_FPS:-}"
+OUTPUT_DIR_OVERRIDE="${AVA_OUTPUT_DIR:-}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="ava/e1:local"
+IMAGE="${AVA_IMAGE:-ava/e1:local}"
 GPU_INDEX="${AVA_GPU:-0}"
 
 # Resolve the config path relative to the repo root.
@@ -53,6 +60,9 @@ LABEL="$(basename "$CONFIG" .yaml)"
 # same folder as the container-written events.jsonl / metrics.json, keeping all
 # artifacts for one sweep point together. Fall back to the label if absent.
 CONFIG_OUTPUT_DIR="$(python3 -c "import yaml;print(yaml.safe_load(open('$ABS_CONFIG')).get('output_dir',''))" 2>/dev/null || true)"
+if [[ -n "$OUTPUT_DIR_OVERRIDE" ]]; then
+  CONFIG_OUTPUT_DIR="$OUTPUT_DIR_OVERRIDE"
+fi
 if [[ -n "$CONFIG_OUTPUT_DIR" ]]; then
   RESULTS_DIR="$ROOT/${CONFIG_OUTPUT_DIR#./}"
 else
@@ -66,14 +76,20 @@ LOG_FILE="$RESULTS_DIR/run.log"
 # its full steady-state duration.
 HOST_CONFIG_FILE="$ABS_CONFIG"
 
-if [[ -n "$DURATION_S" ]]; then
+if [[ -n "$DURATION_S" || -n "$ANALYSIS_FPS" || -n "$OUTPUT_DIR_OVERRIDE" ]]; then
   HOST_CONFIG_FILE="$(mktemp /tmp/ava-live-XXXX.yaml)"
-  python3 - "$ABS_CONFIG" "$DURATION_S" > "$HOST_CONFIG_FILE" <<'PY'
+  python3 - "$ABS_CONFIG" "$DURATION_S" "$ANALYSIS_FPS" "$OUTPUT_DIR_OVERRIDE" > "$HOST_CONFIG_FILE" <<'PY'
 import sys, yaml
-src, dur = sys.argv[1], int(sys.argv[2])
+src, dur, analysis_fps, output_dir = sys.argv[1:]
 with open(src) as fh:
     cfg = yaml.safe_load(fh)
-cfg.setdefault("live", {})["duration_s"] = dur
+if dur:
+    cfg.setdefault("live", {})["duration_s"] = int(dur)
+if analysis_fps:
+    for camera in cfg.setdefault("live", {}).get("cameras", []):
+        camera["analysis_fps"] = float(analysis_fps)
+if output_dir:
+    cfg["output_dir"] = output_dir
 yaml.safe_dump(cfg, sys.stdout, sort_keys=False)
 PY
 fi
@@ -88,6 +104,7 @@ echo "network:    host"
 echo "results:    $RESULTS_DIR"
 echo "log:        $LOG_FILE"
 echo "duration_s: ${DURATION_S:-<from config>}"
+echo "analysis_fps: ${ANALYSIS_FPS:-<from config>}"
 echo "================================"
 
 # Host networking + single-GPU reservation. stdout is streamed live and tee'd

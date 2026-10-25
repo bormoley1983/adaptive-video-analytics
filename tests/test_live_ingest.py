@@ -85,6 +85,7 @@ class TestIterLiveFrames:
             assert isinstance(frame, Frame)
             assert frame.index == i
             assert frame.bgr.shape == (480, 640, 3)
+            assert frame.session_id == "s1"
 
     def test_timestamps_use_fps(self, monkeypatch):
         frames = _make_frames(3)
@@ -125,6 +126,7 @@ class TestIterLiveFrames:
         # 2 frames from first open + 2 from second open = 4 total.
         assert len(result) == 4
         assert call_count == 3  # third attempt failed and stopped
+        assert [frame.session_id for frame in result] == ["s1", "s1", "s2", "s2"]
 
     def test_stops_after_reconnect_budget(self, monkeypatch):
         """Exhausting reconnect_max stops the iterator."""
