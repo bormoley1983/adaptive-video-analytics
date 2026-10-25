@@ -35,6 +35,7 @@ class Frame:
     bgr: object  # numpy.ndarray, typed loosely to avoid a hard cv2 import here
     capture_utc: str | None = None
     time_basis: str = TimeBasis.FILE_PTS_ONLY
+    session_id: str | None = None
 
 
 def iter_frames(source: Path):

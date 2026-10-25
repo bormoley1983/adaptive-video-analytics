@@ -68,7 +68,7 @@ class InferenceTiming:
 
 @dataclass
 class EventLatency:
-    """Tracks source-PTS-to-event-emission latency in seconds."""
+    """Tracks monotonic ingest-to-event-persistence latency in seconds."""
 
     _latencies: list[float] = field(default_factory=list)
 
@@ -104,11 +104,21 @@ class CameraMetrics:
     # Queue state samples (taken periodically by the sampler thread).
     queue_depth_samples: list[int] = field(default_factory=list)
     queue_age_samples: list[float] = field(default_factory=list)
-    # Wall-clock start for FPS computation.
+    # Collector lifetime is retained separately from the active measurement
+    # window, which starts with this camera's first decoded frame.
     _start_time: float = field(default_factory=time.monotonic, repr=False)
+    _measurement_start: float | None = field(default=None, repr=False)
+    _measurement_end: float | None = field(default=None, repr=False)
 
     def record_decode(self) -> None:
+        if self._measurement_start is None:
+            self._measurement_start = time.monotonic()
         self.frames_decoded += 1
+
+    def finish(self) -> None:
+        """Close the active measurement window after processing completes."""
+        if self._measurement_start is not None and self._measurement_end is None:
+            self._measurement_end = time.monotonic()
 
     def record_inference(self, duration_s: float) -> None:
         self.frames_inferred += 1
@@ -142,19 +152,27 @@ class CameraMetrics:
         return time.monotonic() - self._start_time
 
     @property
+    def measurement_seconds(self) -> float:
+        if self._measurement_start is None:
+            return 0.0
+        end = self._measurement_end or time.monotonic()
+        return end - self._measurement_start
+
+    @property
     def input_fps(self) -> float:
-        w = self.wall_seconds
+        w = self.measurement_seconds
         return round(self.frames_decoded / w, 3) if w > 0 else 0.0
 
     @property
     def analyzed_fps(self) -> float:
-        w = self.wall_seconds
+        w = self.measurement_seconds
         return round(self.frames_inferred / w, 3) if w > 0 else 0.0
 
     def to_dict(self) -> dict:
         return {
             "camera_id": self.camera_id,
             "wall_seconds": round(self.wall_seconds, 3),
+            "measurement_seconds": round(self.measurement_seconds, 3),
             "frames_decoded": self.frames_decoded,
             "frames_inferred": self.frames_inferred,
             "frames_dropped": {

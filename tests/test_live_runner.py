@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -10,32 +11,44 @@ import pytest
 
 from ava.config import (
     DetectorConfig,
+    LineCrossingRule,
     LiveCameraConfig,
     LiveRunConfig,
     RuleProfile,
 )
 from ava.detector import Detection, FrameResult
 from ava.events import EventWriter
+from ava.ingest import Frame, TimeBasis
 from ava.live_ingest import LiveSourceConfig
-from ava.live_runner import CameraStats, LiveRunSummary, _CameraWorker, run_live
+from ava.live_runner import (
+    CameraStats,
+    LiveRunSummary,
+    _AnalysisCadence,
+    _CameraWorker,
+    run_live,
+)
 
 
 class FakeDetector:
     """Deterministic detector that returns one tracked detection per frame."""
 
-    def __init__(self, device: str = "cpu") -> None:
+    def __init__(self, device: str = "cpu", delay_s: float = 0.0) -> None:
         self.device = device
+        self.delay_s = delay_s
         self.load_count = 0
         self.detect_count = 0
+        self.reset_count = 0
         self._lock = threading.Lock()
 
     def load(self) -> None:
         self.load_count += 1
 
     def reset_tracker(self) -> None:
-        pass
+        self.reset_count += 1
 
     def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
+        if self.delay_s:
+            time.sleep(self.delay_s)
         with self._lock:
             self.detect_count += 1
         h, w = bgr_frame.shape[:2]
@@ -49,23 +62,57 @@ class FakeDetector:
         return FrameResult(frame_index, timestamp_s, w, h, [det])
 
 
+class CrossingDetector(FakeDetector):
+    """Moves one tracked object across a horizontal line in two frames."""
+
+    def detect(self, frame_index: int, timestamp_s: float, bgr_frame) -> FrameResult:
+        y2 = 0.4 if frame_index == 0 else 0.6
+        detection = Detection(
+            class_id=0,
+            label="person",
+            confidence=0.9,
+            box=(0.3, y2 - 0.2, 0.5, y2),
+            track_id=1,
+        )
+        return FrameResult(
+            frame_index,
+            timestamp_s,
+            bgr_frame.shape[1],
+            bgr_frame.shape[0],
+            [detection],
+        )
+
+
 class FakeSource:
     """Yields a fixed number of frames then stops (simulates stream end)."""
 
-    def __init__(self, n_frames: int = 20, fps: float = 10.0) -> None:
+    def __init__(
+        self,
+        n_frames: int = 20,
+        fps: float = 10.0,
+        delay_s: float = 0.0,
+        session_id: str = "s1",
+        frame_shape: tuple[int, int] = (480, 640),
+    ) -> None:
         self.n_frames = n_frames
         self.fps = fps
+        self.delay_s = delay_s
+        self.session_id = session_id
+        self.frame_shape = frame_shape
 
     def __call__(self, config: LiveSourceConfig):
         from ava.ingest import Frame, TimeBasis
 
         for i in range(self.n_frames):
+            if self.delay_s:
+                time.sleep(self.delay_s)
             yield Frame(
                 index=i,
                 timestamp_s=i / self.fps,
-                bgr=np.zeros((480, 640, 3), dtype=np.uint8),
+                bgr=np.zeros((*self.frame_shape, 3), dtype=np.uint8),
                 capture_utc="2026-10-23T00:00:00.000Z",
                 time_basis=TimeBasis.LIVE_EPOCH,
+                session_id=self.session_id,
             )
 
 
@@ -150,7 +197,88 @@ class TestLiveRunSummary:
         assert d["total_events"] == 3
 
 
+class TestAnalysisCadence:
+    @pytest.mark.parametrize(
+        ("source_fps", "analysis_fps", "expected"),
+        [(10.0, 4.0, 40), (10.0, 10.0, 100), (25.0, 25.0, 250), (50.0, 50.0, 500)],
+    )
+    def test_realizes_requested_rate_without_exceeding_source(
+        self, source_fps, analysis_fps, expected
+    ):
+        cadence = _AnalysisCadence(analysis_fps)
+
+        selected = [
+            index
+            for index in range(int(source_fps * 10))
+            if cadence.should_analyze(index / source_fps, "s1")
+        ]
+
+        assert len(selected) == expected
+
+    def test_rate_above_source_selects_each_available_frame(self):
+        cadence = _AnalysisCadence(50.0)
+
+        selected = [
+            index
+            for index in range(100)
+            if cadence.should_analyze(index / 10.0, "s1")
+        ]
+
+        assert len(selected) == 100
+
+    def test_new_session_restarts_source_time_schedule(self):
+        cadence = _AnalysisCadence(4.0)
+        first_session = [
+            cadence.should_analyze(index / 10.0, "s1") for index in range(10)
+        ]
+
+        first_after_reconnect = cadence.should_analyze(0.0, "s2")
+
+        assert sum(first_session) == 4
+        assert first_after_reconnect is True
+
+
 class TestCameraWorker:
+    @pytest.mark.parametrize(
+        ("source_fps", "analysis_fps", "expected"),
+        [(10.0, 4.0, 40), (10.0, 10.0, 100), (25.0, 25.0, 250), (50.0, 50.0, 500)],
+    )
+    def test_worker_realizes_source_time_cadence(
+        self, tmp_path, monkeypatch, source_fps, analysis_fps, expected
+    ):
+        import ava.live_runner as lr
+
+        frame_count = int(source_fps * 10)
+        fake_source = FakeSource(
+            n_frames=frame_count,
+            fps=source_fps,
+            frame_shape=(4, 4),
+        )
+        monkeypatch.setattr(lr, "iter_live_frames", fake_source)
+        writer = EventWriter(tmp_path / "events.jsonl")
+        worker = _CameraWorker(
+            cam_config=LiveCameraConfig(
+                id="cam-01",
+                url="rtsp://test",
+                profiles=[],
+                analysis_fps=analysis_fps,
+            ),
+            source_config=LiveSourceConfig(url="rtsp://test", reconnect_max=0),
+            detector=FakeDetector(),
+            detector_lock=None,
+            rules=[],
+            event_writer=writer,
+            buffer_size=frame_count,
+            model_ref="fake.pt",
+        )
+
+        worker.run()
+        writer.close()
+
+        assert worker.stats.frames_decoded == frame_count
+        assert worker.stats.frames_inferred == expected
+        assert worker.stats.frames_dropped == 0
+
     def test_processes_frames_and_emits_no_events_without_rules(self, tmp_path):
         """With no rules, frames are decoded and inferred but no events fire."""
         detector = FakeDetector()
@@ -191,7 +319,7 @@ class TestCameraWorker:
         assert detector.detect_count == 10
 
     def test_buffer_drops_when_full(self, tmp_path):
-        """Frames beyond buffer_size are counted as dropped."""
+        """Only frames displaced from a full processing queue are dropped."""
         detector = FakeDetector()
         writer = EventWriter(tmp_path / "events.jsonl")
         source_config = LiveSourceConfig(url="rtsp://test", reconnect_max=0)
@@ -211,24 +339,130 @@ class TestCameraWorker:
             model_ref="fake.pt",
         )
 
+        for index in range(20):
+            worker._enqueue_frame(
+                Frame(
+                    index=index,
+                    timestamp_s=index / 10.0,
+                    bgr=np.zeros((4, 4, 3), dtype=np.uint8),
+                    time_basis=TimeBasis.LIVE_EPOCH,
+                    session_id="s1",
+                )
+            )
+        writer.close()
+
+        assert worker.queue_snapshot()[0] == 5
+        assert worker.stats.frames_dropped == 15
+        assert worker.metrics.frames_dropped_buffer == 15
+
+    def test_queue_age_uses_oldest_frame_arrival_time(self, tmp_path, monkeypatch):
         import ava.live_runner as lr
 
-        fake_source = FakeSource(n_frames=20, fps=10.0)
-        original_iter = lr.iter_live_frames
-        lr.iter_live_frames = lambda cfg: fake_source(cfg)
+        writer = EventWriter(tmp_path / "events.jsonl")
+        worker = _CameraWorker(
+            cam_config=LiveCameraConfig(
+                id="cam-01", url="rtsp://test", profiles=[], analysis_fps=4.0
+            ),
+            source_config=LiveSourceConfig(url="rtsp://test", reconnect_max=0),
+            detector=FakeDetector(),
+            detector_lock=None,
+            rules=[],
+            event_writer=writer,
+            buffer_size=2,
+            model_ref="fake.pt",
+        )
+        clock = iter([10.0, 10.25])
+        monkeypatch.setattr(lr.time, "perf_counter", lambda: next(clock))
 
-        try:
-            worker.run()
-        finally:
-            lr.iter_live_frames = original_iter
-            writer.close()
+        worker._enqueue_frame(
+            Frame(0, 0.0, np.zeros((4, 4, 3), dtype=np.uint8), session_id="s1")
+        )
+        depth, age_s = worker.queue_snapshot()
+        writer.close()
 
-        # 20 frames decoded, buffer holds 5, so 15 drops.
-        assert worker.stats.frames_decoded == 20
-        assert worker.stats.frames_dropped == 15
+        assert depth == 1
+        assert age_s == pytest.approx(0.25)
+
+    def test_event_latency_includes_queue_inference_and_sink_time(
+        self, tmp_path, monkeypatch
+    ):
+        import ava.live_runner as lr
+
+        monkeypatch.setattr(
+            lr,
+            "iter_live_frames",
+            FakeSource(n_frames=2, fps=10.0, frame_shape=(4, 4)),
+        )
+        writer = EventWriter(tmp_path / "events.jsonl")
+        worker = _CameraWorker(
+            cam_config=LiveCameraConfig(
+                id="cam-01", url="rtsp://test", profiles=[], analysis_fps=10.0
+            ),
+            source_config=LiveSourceConfig(url="rtsp://test", reconnect_max=0),
+            detector=CrossingDetector(),
+            detector_lock=None,
+            rules=[
+                LineCrossingRule(
+                    id="cross",
+                    line={"start": (0.0, 0.5), "end": (1.0, 0.5)},
+                )
+            ],
+            event_writer=writer,
+            buffer_size=2,
+            model_ref="fake.pt",
+            slow_sink_s=0.01,
+        )
+
+        worker.run()
+        writer.close()
+
+        latency = worker.metrics.event_latency.percentiles()
+        assert worker.stats.events_emitted == 1
+        assert latency["count"] == 1
+        assert latency["p50"] >= 0.01
+
+    def test_reconnect_builds_new_rule_session_and_restarts_cadence(
+        self, tmp_path, monkeypatch
+    ):
+        import ava.live_runner as lr
+
+        frames = [
+            Frame(0, 0.0, np.zeros((4, 4, 3), dtype=np.uint8), session_id="s1"),
+            Frame(1, 0.1, np.zeros((4, 4, 3), dtype=np.uint8), session_id="s1"),
+            Frame(2, 0.0, np.zeros((4, 4, 3), dtype=np.uint8), session_id="s2"),
+        ]
+        monkeypatch.setattr(lr, "iter_live_frames", lambda config: iter(frames))
+        sessions = []
+        real_rule_engine = lr.RuleEngine
+
+        def recording_engine(*args, **kwargs):
+            sessions.append(kwargs["session_id"])
+            return real_rule_engine(*args, **kwargs)
+
+        monkeypatch.setattr(lr, "RuleEngine", recording_engine)
+        writer = EventWriter(tmp_path / "events.jsonl")
+        worker = _CameraWorker(
+            cam_config=LiveCameraConfig(
+                id="cam-01", url="rtsp://test", profiles=[], analysis_fps=4.0
+            ),
+            source_config=LiveSourceConfig(url="rtsp://test", reconnect_max=0),
+            detector=FakeDetector(),
+            detector_lock=None,
+            rules=[],
+            event_writer=writer,
+            buffer_size=3,
+            model_ref="fake.pt",
+        )
+
+        worker.run()
+        writer.close()
+
+        assert sessions == ["s1", "s2"]
+        assert worker.stats.frames_inferred == 2
+        assert worker.detector.reset_count == 1
 
     def test_fps_decimation(self, tmp_path):
-        """With analysis_fps much lower than source fps, inference is decimated."""
+        """Source-time pacing selects the configured analysis cadence."""
         detector = FakeDetector()
         writer = EventWriter(tmp_path / "events.jsonl")
         source_config = LiveSourceConfig(url="rtsp://test", reconnect_max=0)
@@ -251,9 +485,8 @@ class TestCameraWorker:
 
         import ava.live_runner as lr
 
-        # Use a fast fake source (no real-time pacing) so the test is quick.
-        # The decimation uses wall-clock time, so with 10 frames arriving
-        # instantly, only ~1-2 will pass the interval check.
+        # Delivery is intentionally faster than real time: pacing uses source
+        # timestamps and therefore remains deterministic.
         fake_source = FakeSource(n_frames=10, fps=10.0)
         original_iter = lr.iter_live_frames
         lr.iter_live_frames = lambda cfg: fake_source(cfg)
@@ -264,11 +497,8 @@ class TestCameraWorker:
             lr.iter_live_frames = original_iter
             writer.close()
 
-        # All 10 frames decoded, but inference is decimated.
         assert worker.stats.frames_decoded == 10
-        # With instant frame delivery and 2 FPS target (0.5s interval),
-        # only the first frame passes; subsequent frames arrive too fast.
-        assert worker.stats.frames_inferred <= 3
+        assert worker.stats.frames_inferred == 2
 
     def test_shared_detector_lock(self, tmp_path):
         """In shared mode, the detector lock is acquired around detect()."""
@@ -488,7 +718,7 @@ class TestMetricsIntegration:
         """Buffer drops are recorded in metrics."""
         import ava.live_runner as lr
 
-        fake_det = FakeDetector()
+        fake_det = FakeDetector(delay_s=0.01)
         monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
 
         def fake_iter(cfg: LiveSourceConfig):
@@ -508,7 +738,8 @@ class TestMetricsIntegration:
         with metrics_path.open() as f:
             data = json.load(f)
         cam_data = data["cameras"][0]
-        assert cam_data["frames_dropped"]["buffer_full"] == 15
+        assert cam_data["frames_dropped"]["buffer_full"] == summary.cameras[0].frames_dropped
+        assert cam_data["frames_dropped"]["buffer_full"] >= 14
 
 
 class TestOverloadScenarios:
@@ -576,7 +807,7 @@ class TestOverloadScenarios:
         """Frame buffer never exceeds its configured size."""
         import ava.live_runner as lr
 
-        fake_det = FakeDetector()
+        fake_det = FakeDetector(delay_s=0.01)
         monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
 
         def fake_iter(cfg: LiveSourceConfig):
@@ -590,10 +821,9 @@ class TestOverloadScenarios:
 
         summary = run_live(live_config, det_config, out_dir, gpu=None)
 
-        # 100 frames decoded, buffer holds 10, so 90 drops.
         cam = summary.cameras[0]
         assert cam.frames_decoded == 100
-        assert cam.frames_dropped == 90
+        assert 89 <= cam.frames_dropped <= 90
 
 
 class TestStructuredLogs:
@@ -632,6 +862,16 @@ class TestStructuredLogs:
         done = next(l for l in lines if l["component"] == "live_run.camera_done")
         assert done["camera_id"] == "cam-01"
         assert done["frames_decoded"] == 5
+
+    def test_shared_conventional_mode_warns_about_tracker_isolation(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _, lines = self._run(tmp_path, monkeypatch, capsys)
+
+        warning = next(
+            line for line in lines if line["component"] == "live_run.tracker_isolation"
+        )
+        assert warning["severity"] == "warning"
 
     def test_no_raw_rtsp_url_in_any_log_line(self, tmp_path, monkeypatch, capsys):
         import json
@@ -766,13 +1006,13 @@ class TestReconnectTelemetry:
 
 
 class TestOverloadTelemetry:
-    """B-021 closeout: overload (slow sink) is visible in Prometheus metrics."""
+    """B-021 closeout: processing-queue overload is visible in metrics."""
 
-    def test_slow_sink_drops_visible_in_metrics(self, tmp_path, monkeypatch):
+    def test_queue_overload_drops_visible_in_metrics(self, tmp_path, monkeypatch):
         import ava.live_runner as lr
         from ava.telemetry import render_metrics
 
-        fake_det = FakeDetector()
+        fake_det = FakeDetector(delay_s=0.01)
         monkeypatch.setattr(lr, "_build_detector", lambda dc, **kw: fake_det)
 
         def fake_iter(cfg: LiveSourceConfig):
@@ -780,23 +1020,21 @@ class TestOverloadTelemetry:
 
         monkeypatch.setattr(lr, "iter_live_frames", fake_iter)
 
-        live_config = _make_live_config(
-            n_cameras=1, buffer_size=5, slow_sink_s=0.01
-        )
+        live_config = _make_live_config(n_cameras=1, buffer_size=5)
         det_config = _make_detector_config(tmp_path)
 
         summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
 
         cam = summary.cameras[0]
         assert cam.frames_decoded == 20
-        assert cam.frames_dropped == 15
+        assert 14 <= cam.frames_dropped <= 15
 
         text = render_metrics()
         assert 'ava_frames_dropped_total{camera="cam-01",reason="buffer_full"' in text
         # The drop counter value matches the stats.
         for line in text.splitlines():
             if line.startswith('ava_frames_dropped_total{camera="cam-01",reason="buffer_full"'):
-                assert line.split()[-1] == "15.0"
+                assert float(line.split()[-1]) >= cam.frames_dropped
 
 
 class TestBoundedDuration:

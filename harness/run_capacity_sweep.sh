@@ -4,7 +4,9 @@
 # Runs all 16 sweep points sequentially, smallest-first (4 -> 16 -> 25 -> 50),
 # both detector kinds (conventional, prompted) and both detector modes
 # (shared, per_camera). Each point runs at its full committed duration_s via the
-# containerized run helper. Stops escalating after the first failed point.
+# containerized run helper. Stops escalating after the first execution failure.
+# RUN_OK means the process completed and wrote metrics; acceptance is evaluated
+# separately from the recorded FPS, latency, queue, drop and error values.
 #
 # GPU discipline: every point pins to GPU 0 (CUDA_VISIBLE_DEVICES=0 inside the
 # helper). Before each point we verify GPU 0 is not unexpectedly busy and that
@@ -48,9 +50,9 @@ POINTS=(
 
 # START_INDEX (1-based) lets a resumed sweep skip already-completed points.
 # Default 1 = run all. When >1, append to the existing status file instead of
-# overwriting it, so prior PASS rows are preserved.
+# overwriting it, so prior run-result rows are preserved.
 START_INDEX="${START_INDEX:-1}"
-HEADER='point\tcameras\tkind\tmode\tstatus\twall_seconds\ttotal_events\tgpu0_mem_mib_start\tgpu_util_avg_pct\tgpu_util_peak_pct\tcpu_load1m_avg\tram_avail_avg_mib\tnote'
+HEADER='point\tcameras\tkind\tmode\trun_status\twall_seconds\ttotal_events\tgpu0_mem_mib_start\tgpu_util_avg_pct\tgpu_util_peak_pct\tcpu_load1m_avg\tram_avail_avg_mib\tnote'
 if [[ "$START_INDEX" -le 1 ]]; then
   printf "$HEADER\n" > "$STATUS_FILE"
 else
@@ -146,10 +148,10 @@ else:
   fi
 
   if [[ $rc -eq 0 && "$wall_s" != "-" ]]; then
-    status="PASS"
+    status="RUN_OK"
     note=""
   else
-    status="FAIL"
+    status="RUN_FAILED"
     note="exit=$rc"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -157,7 +159,7 @@ else:
     "$gpu_util_avg" "$gpu_util_peak" "$cpu_load_avg" "$ram_avail_avg" "$note" >> "$STATUS_FILE"
   log "[$idx/$total] $label : $status wall=${wall_s}s events=$events gpu_util=${gpu_util_avg}%/${gpu_util_peak}% cpu=${cpu_load_avg} ram=${ram_avail_avg}MiB (exit=$rc)"
 
-  if [[ "$status" == "FAIL" ]]; then
+  if [[ "$status" == "RUN_FAILED" ]]; then
     log "STOP-ON-FAILURE: point $label failed; not escalating further."
     break
   fi

@@ -8,9 +8,10 @@ concurrent multi-camera run. Two detector modes are supported:
 - ``per_camera``: each camera gets its own Detector instance (own VRAM).
   Fully parallel inference; for higher camera counts.
 
-Per-camera frame buffers are bounded (deque with maxlen); stale frames are
-dropped with a counter when the buffer is full. Inference is decimated to
-the configured ``analysis_fps`` per camera; decode runs at native rate.
+Each camera has an independent decode producer and inference consumer joined
+by a bounded queue. When inference falls behind, the oldest queued frame is
+dropped to preserve live latency. Inference follows an absolute source-time
+cadence at the configured ``analysis_fps`` per camera.
 
 The event schema is identical to file-based runs (ADR-5): versioned
 EventRecord objects appended to a shared events.jsonl.
@@ -23,11 +24,13 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from math import floor
 from pathlib import Path
 
 from .config import CONFIG_SCHEMA_VERSION, DetectorConfig, LiveRunConfig
 from .detector import Detector
 from .events import EventRecord, EventWriter, EvidenceLocator
+from .ingest import Frame
 from .live_ingest import LiveSourceConfig, iter_live_frames
 from .live_metrics import CameraMetrics, LiveMetricsCollector
 from .rules import RuleEngine
@@ -84,6 +87,35 @@ class LiveRunSummary:
         }
 
 
+@dataclass(frozen=True)
+class _QueuedFrame:
+    frame: Frame
+    enqueued_at: float
+
+
+class _AnalysisCadence:
+    """Select frames against an absolute source-time schedule."""
+
+    def __init__(self, analysis_fps: float) -> None:
+        self.interval_s = 1.0 / analysis_fps
+        self._next_due_s: float | None = None
+        self._session_id: str | None = None
+
+    def should_analyze(self, timestamp_s: float, session_id: str) -> bool:
+        if self._session_id != session_id or self._next_due_s is None:
+            self._session_id = session_id
+            self._next_due_s = timestamp_s
+
+        if timestamp_s < self._next_due_s - 1e-6:
+            return False
+
+        intervals_elapsed = floor(
+            (timestamp_s - self._next_due_s + 1e-6) / self.interval_s
+        )
+        self._next_due_s += (intervals_elapsed + 1) * self.interval_s
+        return True
+
+
 class _CameraWorker:
     """Processes one camera's frame stream: decode -> infer -> rules -> events.
 
@@ -122,49 +154,97 @@ class _CameraWorker:
         # Shared with the ingest iterator so a stop signal interrupts an
         # in-flight cap.read() promptly (bounded runs, external stops).
         source_config.stop_event = self._stop_event
-        self._frame_buffer: deque = deque(maxlen=buffer_size)
-        # Inference pacing (source-time based, ADR-4).
-        self._last_infer_ts: float | None = None
-        self._infer_interval: float = 1.0 / cam_config.analysis_fps
+        self._frame_buffer: deque[_QueuedFrame] = deque(maxlen=buffer_size)
+        self._queue_condition = threading.Condition()
+        self._producer_done = False
+        self._producer_error: Exception | None = None
+        self._cadence = _AnalysisCadence(cam_config.analysis_fps)
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._queue_condition:
+            self._queue_condition.notify_all()
 
-    def run(self) -> None:
-        """Main loop: decode frames, decimate to analysis_fps, infer, apply rules."""
-        engine = RuleEngine(
-            self.rules,
-            camera_id=self.cam.id,
-            session_id="s1",
-            schema_version=CONFIG_SCHEMA_VERSION,
-        )
+    def _enqueue_frame(self, frame) -> None:
+        queued = _QueuedFrame(frame=frame, enqueued_at=time.perf_counter())
+        with self._queue_condition:
+            if len(self._frame_buffer) == self._frame_buffer.maxlen:
+                self._frame_buffer.popleft()
+                self.stats.frames_dropped += 1
+                self.metrics.record_drop_buffer()
+                if self.telemetry is not None:
+                    self.telemetry.record_drop(self.cam.id, "buffer_full")
+            self._frame_buffer.append(queued)
+            self._queue_condition.notify()
 
+    def _dequeue_frame(self) -> _QueuedFrame | None:
+        with self._queue_condition:
+            while not self._frame_buffer and not self._producer_done:
+                if self._stop_event.is_set():
+                    return None
+                self._queue_condition.wait(timeout=0.1)
+            if self._stop_event.is_set() or not self._frame_buffer:
+                return None
+            return self._frame_buffer.popleft()
+
+    def queue_snapshot(self) -> tuple[int, float]:
+        """Return current queue depth and oldest-frame age."""
+        with self._queue_condition:
+            depth = len(self._frame_buffer)
+            if not depth:
+                return 0, 0.0
+            age_s = max(0.0, time.perf_counter() - self._frame_buffer[0].enqueued_at)
+            return depth, age_s
+
+    def _produce_frames(self) -> None:
         try:
             for frame in iter_live_frames(self.source_config):
                 if self._stop_event.is_set():
                     break
-
                 self.stats.frames_decoded += 1
                 self.metrics.record_decode()
                 if self.telemetry is not None:
                     self.telemetry.record_decode(self.cam.id)
+                self._enqueue_frame(frame)
+        except Exception as exc:  # noqa: BLE001 - surfaced on the worker
+            self._producer_error = exc
+        finally:
+            with self._queue_condition:
+                self._producer_done = True
+                self._queue_condition.notify_all()
 
-                # Bounded buffer: push frame, count drops.
-                if len(self._frame_buffer) == self._frame_buffer.maxlen:
-                    self.stats.frames_dropped += 1
-                    self.metrics.record_drop_buffer()
-                    if self.telemetry is not None:
-                        self.telemetry.record_drop(self.cam.id, "buffer_full")
-                self._frame_buffer.append((frame.index, frame.bgr))
+    def run(self) -> None:
+        """Consume queued frames, pace inference, apply rules and write events."""
+        current_session_id: str | None = None
+        engine: RuleEngine | None = None
+        producer = threading.Thread(
+            target=self._produce_frames,
+            name=f"ava-decode-{self.cam.id}",
+            daemon=True,
+        )
+        producer.start()
 
-                # Decimate to analysis_fps using source timestamp (ADR-4:
-                # use source PTS for timing, not wall-clock). A small epsilon
-                # guards against floating-point drift at exact-rate boundaries.
-                if self._last_infer_ts is not None:
-                    elapsed = frame.timestamp_s - self._last_infer_ts
-                    if elapsed < self._infer_interval - 1e-6:
-                        continue
-                self._last_infer_ts = frame.timestamp_s
+        try:
+            while True:
+                queued = self._dequeue_frame()
+                if queued is None:
+                    break
+                frame = queued.frame
+
+                session_id = frame.session_id or "s1"
+                if session_id != current_session_id:
+                    if current_session_id is not None and self.detector_lock is None:
+                        self.detector.reset_tracker()
+                    current_session_id = session_id
+                    engine = RuleEngine(
+                        self.rules,
+                        camera_id=self.cam.id,
+                        session_id=session_id,
+                        schema_version=CONFIG_SCHEMA_VERSION,
+                    )
+
+                if not self._cadence.should_analyze(frame.timestamp_s, session_id):
+                    continue
 
                 # Inference (shared lock or dedicated) with timing.
                 infer_start = time.perf_counter()
@@ -186,6 +266,7 @@ class _CameraWorker:
 
                 # Rule engine.
                 emitted_utc = _utc_now_iso()
+                assert engine is not None  # initialized for this queued frame
                 events = engine.process_frame(result, emitted_utc)
                 for event in events:
                     record = EventRecord.from_rule_event(
@@ -200,12 +281,13 @@ class _CameraWorker:
                         time.sleep(self.slow_sink_s)
                     self.event_writer.write(record)
                     self.stats.events_emitted += 1
-                    # Event latency: wall-clock from frame decode to emission.
-                    # (Source PTS is not directly comparable to wall-clock;
-                    # this measures processing pipeline latency.)
-                    self.metrics.record_event(infer_duration)
+                    event_latency = time.perf_counter() - queued.enqueued_at
+                    self.metrics.record_event(event_latency)
                     if self.telemetry is not None:
-                        self.telemetry.record_event(self.cam.id, infer_duration)
+                        self.telemetry.record_event(self.cam.id, event_latency)
+
+            if self._producer_error is not None:
+                raise self._producer_error
 
         except Exception as exc:  # noqa: BLE001 - worker must not crash the run
             self.stats.errors.append(f"{type(exc).__name__}: {exc}")
@@ -213,7 +295,10 @@ class _CameraWorker:
             if self.telemetry is not None:
                 self.telemetry.record_error(self.cam.id, "other")
         finally:
-            pass
+            self._stop_event.set()
+            with self._queue_condition:
+                self._queue_condition.notify_all()
+            producer.join(timeout=2.0)
 
 
 def run_live(
@@ -278,6 +363,7 @@ def run_live(
             for w in workers:
                 if w.cam.id == _cam_id:
                     w.stats.reconnects += 1
+                    w.metrics.record_reconnect()
                     break
             if telemetry is not None:
                 telemetry.record_reconnect(_cam_id)
@@ -354,6 +440,12 @@ def run_live(
         backend=live_config.backend,
         prometheus_port=live_config.telemetry.prometheus_port,
     )
+    if detector_config.kind == "conventional" and live_config.detector_mode == "shared":
+        run_ctx.log(
+            "live_run.tracker_isolation",
+            "warning",
+            "shared conventional detector reuses persistent tracker state across cameras",
+        )
 
     # Background host/GPU sampler thread; also samples bounded queue state so
     # depth/age appear in both metrics.json and the Prometheus gauges.
@@ -364,12 +456,7 @@ def run_live(
             collector.sample_host()
             for worker in workers:
                 cam_id = worker.cam.id
-                depth = len(worker._frame_buffer)
-                age_s = 0.0
-                if depth:
-                    # Approximate age from the buffer's frame spacing; the
-                    # sampler only needs a bounded, monotonic signal.
-                    age_s = min(depth / max(worker.cam.analysis_fps, 1e-6), 60.0)
+                depth, age_s = worker.queue_snapshot()
                 cm = collector.get_camera(cam_id)
                 if cm is not None:
                     cm.sample_queue(depth, age_s)
@@ -416,6 +503,10 @@ def run_live(
     event_writer.close()
 
     # Write metrics.
+    for cam in live_config.cameras:
+        cm = collector.get_camera(cam.id)
+        if cm is not None:
+            cm.finish()
     metrics_path = collector.write(output_dir / "metrics.json")
 
     for worker in workers:

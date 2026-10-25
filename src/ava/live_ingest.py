@@ -165,6 +165,7 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
                     bgr=frame,
                     capture_utc=_utc_now_iso(),
                     time_basis=TimeBasis.LIVE_EPOCH,
+                    session_id=state.session_id,
                 )
                 state.frame_index += 1
                 session_frame += 1

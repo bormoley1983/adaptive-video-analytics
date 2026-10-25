@@ -225,10 +225,11 @@ not established by this conventional one-stream experiment.
 
 Status: **Sweep complete (16/16 points ran to completion); no point meets the
 4 FPS/camera pass gate.** Capacity is therefore **provisional**, not a passing
-limit. The dominant finding is that per-camera analysis throughput is capped just
-below the configured `analysis_fps: 4.0` target at every stream count, so the
-measured "capacity" is set by the frame-rate decimation + bounded-buffer design,
-not by GPU headroom. See [Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window)
+limit. The valid dominant finding is that the relative source-PTS pacing gate
+quantizes a 4 FPS request on a 10 FPS source to about 3.33 FPS. The recorded
+buffer-drop, queue-age and event-latency values are invalid because the original
+instrumentation did not measure those contracts. See
+[Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window)
 and the parallel-investigation handoff at
 [`docs/handoff-e3-t5-fps-cap.md`](../../docs/handoff-e3-t5-fps-cap.md).
 
@@ -257,22 +258,23 @@ latency **< 3 s** (excluding dwell), queues do not grow, and no worker crashes.
 | Gate | Result across all 16 points |
 | --- | --- |
 | ≥ 4 analysis FPS per camera | **FAIL everywhere.** Measured 2.88–3.32 FPS (see table). |
-| Event p95 latency < 3 s | PASS where events exist (worst 0.33 s at 50-conv-per_camera). |
-| Queues do not grow | Plateau at depth 40 (= `buffer_size`), age ~10 s; bounded, not unbounded growth. |
+| Event p95 latency < 3 s | **UNPROVEN.** The recorded value was detector-call duration, not ingest-to-event latency. |
+| Queues do not grow | **UNPROVEN.** The deque was an unconsumed history ring; depth and age did not represent processing backlog. |
 | No worker crashes | PASS — all 16 points reached EOS with exit 0. |
 
 **Highest passing point: none.** Every point is provisional because the FPS gate
 is unmet at every stream count. **First bottleneck:** per-camera analysis
-throughput capped near ~3.3 FPS (below the 4.0 target) with a constant ~50%
-buffer-full drop rate — independent of GPU, which stays far from saturated.
+throughput capped near ~3.3 FPS by the relative PTS gate. GPU was not saturated
+under this throttled workload, but the sweep cannot establish remaining capacity.
 
 ## Detailed per-point results
 
 All values are per-point aggregates over the 2100 s run. `afps min/avg` is the
-minimum and mean analyzed FPS across that point's cameras. `drop%` is the
-buffer-full drop rate (dropped / (decoded + dropped)). `q_end` is the end-of-run
-mean queue depth. `lat_p95s` is the worst-camera event-latency p95 (0 where no
-events were emitted). GPU/CPU/RAM are host-sampler averages/peaks over the run.
+minimum and mean analyzed FPS across that point's cameras. `drop%`, `q_end` and
+`lat_p95s` are retained as historical raw outputs but are **invalid for capacity
+acceptance**: the old runner counted history-ring overwrites as drops, derived
+queue age from depth divided by target FPS, and recorded inference duration as
+event latency. GPU/CPU/RAM are host-sampler averages/peaks over the run.
 
 | point | cams | kind | mode | wall_s | in_fps | afps min/avg | drop% | q_end | lat_p95s | evts | gpuU avg/peak% | gpuMemPeak MiB | decU% | load1m | ramAvail MiB | inferP95 ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -295,40 +297,41 @@ events were emitted). GPU/CPU/RAM are host-sampler averages/peaks over the run.
 
 ### Reading the table
 
-- **GPU is not the constraint.** Utilization averages 2.9%→63.9% and peaks at
-  78%; VRAM peaks at 11 GB (of 24 GB) only at the heaviest prompted point. There
-  is large headroom, yet FPS still sits below target — so the cap is upstream of
-  GPU saturation.
+- **GPU did not saturate under this throttled workload.** Utilization averages
+  2.9%→63.9% and peaks at 78%; VRAM peaks at 11 GB (of 24 GB). This is evidence
+  of unused resources during these runs, not a capacity estimate.
 - **`decU%` (decoder util) reads 0.0** because the opencv/gstreamer adapter does
   not expose a hardware-decoder utilization counter; this is a telemetry gap, not
-  evidence that decoding was idle. Decoding clearly ran at ~10 FPS/camera
-  (`in_fps`).
+  evidence that decoding was idle. `in_fps` is the rate delivered from the
+  OpenCV capture to AVA; it does not count frames discarded inside the backend.
 - **`inferP95 ms` spikes at 50 cameras** (up to 345 ms) — the shared detector
   lock serializes inference across all cameras, so per-call latency grows with
   camera count. This is the first *real* scaling pressure visible in the data,
   but it still does not push average FPS below ~2.9.
 - **shared vs per_camera:** near-identical analyzed FPS; per_camera uses more
-  VRAM (one model instance per camera) and shows higher GPU-util peaks.
+  VRAM (one model instance per camera) and shows higher GPU-util peaks. The
+  conventional shared mode also interleaves cameras through one persistent
+  ByteTrack instance, so its tracking output is not a valid cross-camera
+  correctness result.
 
 ## Root cause of the sub-4 FPS window
 
 The measured analyzed FPS is *by construction* just under the configured
-`analysis_fps: 4.0`. The mechanism, from `src/ava/live_runner.py`:
+`analysis_fps: 4.0`. The valid mechanism in the measured revision was:
 
-1. **Decode runs at native rate** (~10 FPS/camera) and every decoded frame is
-   pushed into a bounded buffer (`deque(maxlen=buffer_size)` with
-   `buffer_size: 40`).
+1. AVA receives frames from each OpenCV capture at approximately 10 FPS.
 2. **Inference is decimated to `analysis_fps`** using the *source PTS*: a frame
    is inferred only when `frame.timestamp_s - last_infer_ts >= 1/analysis_fps`
    (i.e. ≥ 0.25 s). This targets exactly 4 inferences/s per camera.
-3. **The buffer fills and overflows.** Because decode (~10 FPS) outpaces the
-   decimated inference (~4 FPS), the 40-deep buffer stays full; every frame that
-   arrives while it is full is counted as a `buffer_full` drop. At a steady
-   10-in / 4-out ratio this yields the observed **~50% drop rate** and a queue
-   depth pinned at exactly `buffer_size` (40), with age ≈ 40/4 = 10 s.
+3. Because the gate advances from the last selected frame, eligible timestamps
+   are `0.0, 0.3, 0.6, ...`, realizing approximately 3.33 FPS.
 
-So the ~3.3 FPS is not a GPU or host limit — it is the decimation target minus
-timing overhead:
+The deque did not participate in inference flow: frames were inferred directly
+from the decode loop, appended to the deque, and never removed. Once full, every
+append was counted as a drop. The reported ~50% was additionally calculated as
+`drops / (decoded + drops)` even though those drops were already a subset of
+decoded frames. Queue age was synthesized as `depth / analysis_fps`. Therefore
+the drop rate, queue depth and queue age cannot support any overload conclusion.
 
 - Target inferences over 2100 s at 4.0 FPS = **8400**. Measured ≈ **6990**
   (cam-01, 4/25-cam points) → a **~17% shortfall**, giving ~3.33 FPS.
@@ -338,12 +341,67 @@ timing overhead:
   small warm-up/teardown loss at run boundaries. At 50 cameras the shortfall
   widens (~21%) as decode rate dips to ~9.1–9.5 FPS under host load.
 
-**Consequence for the capacity claim:** the sweep measured a *throughput ceiling
-imposed by the analysis_fps decimation + bounded-buffer design*, not the true
-GPU/host capacity limit. To measure real capacity, the decimation target and
-buffer must be raised (or removed) so inference is no longer self-limited below
-the point where GPU or host resources actually saturate. This is handed off for
-parallel investigation.
+**Consequence for the capacity claim:** the sweep measured a throughput ceiling
+imposed by the relative PTS gate, not the true GPU/host capacity limit. Raising
+the old deque size cannot change throughput and would only retain more decoded
+BGR frames. A valid follow-up requires an absolute cadence, a real bounded
+producer/consumer queue, timestamp-derived queue age and ingest-to-event latency.
+
+## Flow-correction diagnostics (2026-10-25)
+
+ADR-17 was implemented in the Python reference runner: each camera now has a
+decode producer and bounded drop-oldest processing queue, analysis uses an
+absolute source-time cadence, and per-camera FPS excludes connection startup by
+measuring from the first decoded frame through processing completion. Event
+latency is monotonic enqueue-to-persistence time.
+
+Two GPU-0-only conventional/per-camera diagnostics used four existing 10 FPS
+RTSP sources for 120 seconds each. These short runs validate the corrected flow
+contracts; they do not replace ADR-6's long-duration capacity gate. The earlier
+35-minute sweep remains stability evidence, but capacity stays provisional.
+
+| target | analyzed FPS range | input FPS range | drops | max queue/age | inference p95 | event p95 where emitted | GPU util avg/peak |
+| --- | --- | --- | ---: | --- | --- | --- | --- |
+| 4 FPS | 4.042–4.043 | 10.099–10.113 | 0 | 0 / 0 s | 6.84–7.19 ms | 6.83 ms | 2.96% / 9% |
+| 10 FPS | 10.103–10.112 | 10.103–10.112 | 0 | 0 / 0 s | 6.55–8.14 ms | 7.91 ms | 9.67% / 36% |
+
+Both runs completed without reconnects or worker errors. Deterministic worker
+tests also cover 25 and 50 FPS sources; a target above source FPS selects every
+available frame rather than inventing frames. Live 25/50 FPS claims require
+declared sources at least that fast.
+
+A 300-second conventional/per-camera diagnostic then requested 10 FPS from all
+50 cameras (500 FPS aggregate target). It did **not** remain real-time: analyzed
+throughput averaged 4.20 FPS/camera (2.99–5.93 range), all 50 queues reached the
+40-frame limit, and 51,265 of 96,628 decoded frames were dropped by the bounded
+drop-oldest policy. At shutdown, queue depth averaged 39.92 and oldest-frame age
+averaged 3.94 s (4.00 s maximum). The bounded queue therefore prevented
+unbounded latency, but the point failed both throughput and no-drop acceptance.
+Inference p95 averaged 338.84 ms/camera (321.80–353.21 ms).
+
+GPU 0 averaged 33.77% utilization, peaked at 50%, and used at most 5,397 MiB,
+so GPU compute and VRAM were not saturated. Host load reached 7.92 and available
+RAM fell to 4,289 MiB. Camera initialization was staggered: measurement windows
+ranged from 88.25 to 295.10 seconds, so this short run is diagnostic evidence,
+not a stable five-minute all-cameras-active capacity result. Repeated H.264
+reference-picture warnings produced no recorded reconnects or worker errors.
+
+Isolated image:
+`ava/e3-flow-fix@sha256:fddd2b3b03419db6c8a94a9905ce1407697814aa1b544854c3561aad9d9c2106`.
+Ignored metric evidence:
+
+- 4 FPS `metrics.json` SHA-256:
+  `a445a82c25da30c0bdcba1a88c89df36b9c2cfbdb1a03620867e58285ec2a897`
+- 10 FPS `metrics.json` SHA-256:
+  `0fa17c2cea371ad2f7f203b33df82772a360e5f0ee1c421ffe5bb3b54cfa8581`
+- 50-camera / 10 FPS / 300 s `metrics.json` SHA-256:
+  `d59a48f4161acfeeddb6e33c7c3ee5b4025e838bf84f2c154f2d193073e430a6`
+- 50-camera / 10 FPS / 300 s `run.log` SHA-256:
+  `70353b12dd452fecdae5278b630bb194900e665bc4bf31efa67612a6d6d6de0f`
+
+Conventional shared-detector mode still reuses persistent ByteTrack state
+across cameras. The runner emits an explicit warning, and this mode remains
+excluded from cross-camera correctness claims until tracker state is isolated.
 
 ## Observability-stack overhead
 
@@ -352,9 +410,9 @@ ran alongside the sweep on CPU only. Per B-022's measured baseline the full ops
 project costs **~486 MiB RAM and < 2% CPU** at idle; during the sweep the host
 `load1m` rose from ~0.5 (4 cams) to ~5.0 (50 cams), dominated by the analytics
 workers, not the observability stack. The per-point `ramAvail` decline
-(9344 → 2401 MiB at 50-conv-shared) tracks camera count and is attributable to
-the live runner's per-camera buffers/decoders, with the ops stack contributing a
-small constant offset.
+(9344 → 2401 MiB at 50-conv-shared) tracks camera count. The old runner retained
+40 full BGR frames per camera in an unconsumed history ring, which materially
+contributed to memory use; the exact share was not isolated.
 
 ## Quality comparison with E-2
 
@@ -394,11 +452,13 @@ capacity sweep.
 
 | # | Gate | Status | Evidence |
 | --- | ------ | -------- | ---------- |
-| 1 | Run 4/16/25/50 × conv/prom × shared/per_camera, ≥30 min each | **Done** | 16/16 PASS, wall ≈ 2100 s each (`sweep-status.tsv`) |
+| 1 | Run 4/16/25/50 × conv/prom × shared/per_camera, ≥30 min each | **Done** | 16/16 execution-complete (historically labeled PASS), wall ≈ 2100 s each |
 | 2 | Report highest passing point | **None passes** — all provisional (FPS gate unmet) | per-point table above |
-| 3 | Report first failure/bottleneck | **Done** — sub-4 FPS decimation cap + ~50% buffer-full drops | Root-cause section |
+| 3 | Report first failure/bottleneck | **Done** — relative-gate cap proven; invalid overload telemetry explicitly withdrawn | Root-cause section |
 | 4 | Report observability-stack overhead | **Done** — ~486 MiB / <2% CPU (B-022 baseline) | Overhead section |
 | 5 | Quality comparison with E-2 | **Directional only** — no parity claimed | Quality section |
 
-Open: raise/remove the `analysis_fps` decimation + bounded-buffer self-limit and
-re-run to find the true GPU/host saturation point (see handoff).
+The corrected cadence, queue, latency and drop contracts now have deterministic
+coverage and short 4/10 FPS live proof. Open: run a new declared stable-capacity
+sweep and resolve conventional shared-mode tracker isolation before any final
+cross-camera capacity/quality claim (see handoff).

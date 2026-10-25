@@ -6,16 +6,17 @@ throughput on homelab hardware, and use the work to strengthen practical video
 analytics, IT, software-development and architecture skills. The repository is
 also a proving ground for disciplined, human-gated agent-driven development.
 
-The currently implemented slice is a single-camera offline proof of concept. It runs a
-**conventional** detector (YOLO26n + ByteTrack) or a **text-prompted** detector
-(YOLOE-26 small) on MP4 input. Configuration can add line-crossing, zone-entry
-and dwell rules, producing annotated video plus per-frame detection and event
-JSONL with measured timing.
+The implemented study paths include a single-camera offline proof of concept
+and a provisional multi-camera RTSP runner. Both support a **conventional**
+detector (YOLO26n + ByteTrack) or a **text-prompted** detector (YOLOE-26 small),
+plus line-crossing, zone-entry and dwell rules. The live runner separates decode
+from analysis with bounded per-camera queues and source-time pacing.
 
-Implemented scope: single-camera offline PoC — no RTSP, DeepStream, services,
-databases or dashboards yet. The long-term roadmap retains an independent AVA
-API and UI after the runtime is measured and reliable. See `docs/` (private,
-not in Git) for planning, ADRs and progress.
+The E-3 capacity result remains provisional: the original sweep completed, but
+its pacing and queue instrumentation prevented a valid stable-capacity claim.
+DeepStream compatibility, the local observability stack and replay harness have
+measured evidence; databases and the product API/UI remain later work. See
+`docs/` (private, not in Git) for planning, ADRs and progress.
 
 The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
 serves the local-AI stack and one is shared by AVA and other projects. AVA must
@@ -32,7 +33,7 @@ scripts/          Asset fetch helper
 tests/            Deterministic contract checks (no GPU required)
 benchmarks/e-1/   Measured detector baseline
 benchmarks/e-2/   Measured rule demonstration and current limitations
-benchmarks/e-3/   DeepStream compatibility evidence; capacity remains pending
+benchmarks/e-3/   DeepStream evidence and provisional live-capacity measurements
 requirements.lock.txt  Exact tested runtime dependency closure used by Docker
 Dockerfile        CUDA inference image
 docker-compose.yml  GPU-enabled one-shot run
