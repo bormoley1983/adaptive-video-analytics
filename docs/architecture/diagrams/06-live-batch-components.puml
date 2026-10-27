@@ -1,0 +1,43 @@
+@startuml AVA_Proposed_Live_Batch_Components
+!include <C4/C4_Component>
+
+title AVA - Proposed Live Batched-Inference Components (not implemented)
+LAYOUT_LEFT_RIGHT()
+
+System_Ext(cameras, "RTSP cameras / replay sources", "Independent live H.264 streams")
+System_Ext(gpu, "NVIDIA GPU", "One selected worker GPU")
+ContainerDb(results, "Event/results sinks", "JSONL now; PostgreSQL/outbox later", "Versioned events and benchmark evidence")
+System_Ext(telemetry, "Telemetry backends", "Prometheus and structured logs")
+
+Container_Boundary(worker, "AVA live worker") {
+  Component(decoders, "Decode producers", "One source loop per camera", "Create session-scoped frames and reconnect independently")
+  Component(queues, "Camera ingress queues", "Bounded drop-oldest", "Keep latency and memory bounded; expose real depth and age")
+  Component(cadence, "Cadence selectors", "Absolute source-time schedule", "Select each camera's requested analysis rate")
+  Component(scheduler, "Fair batch scheduler", "Size-or-deadline micro-batcher", "Admits at most one ordered frame per camera; defaults 16 / 20 ms")
+  Component(executor, "GPU inference executor", "One model and CUDA owner per GPU", "Runs one detection batch at a time")
+  Component(demux, "Result demultiplexer", "Camera/session/frame correlation", "Returns detections without per-camera reordering")
+  Component(camera_processors, "Camera processors", "Independent ByteTrack + rule state", "Track, evaluate rules and create events per session")
+  Component(event_sink, "Event sink", "Bounded persistence adapter", "Persists events outside the GPU critical path")
+  Component(metrics, "Live measurement", "Bounded metrics and structured logs", "Measures queues, batches, stages, fairness and latency")
+}
+
+Rel(cameras, decoders, "Streams", "RTSP")
+Rel(decoders, queues, "Enqueues frames with session identity")
+Rel(queues, cadence, "Offers oldest/newest pending frames")
+Rel(cadence, scheduler, "Offers due frames")
+Rel(scheduler, executor, "Submits bounded batches")
+Rel(executor, gpu, "Executes batched detection", "CUDA")
+Rel(executor, demux, "Returns correlated item results")
+Rel(demux, camera_processors, "Delivers ordered detections")
+Rel(camera_processors, event_sink, "Emits versioned events")
+Rel(event_sink, results, "Persists")
+
+Rel(decoders, metrics, "Reports decode/reconnect")
+Rel(queues, metrics, "Reports depth/age/drops")
+Rel(scheduler, metrics, "Reports wait/fill/fairness")
+Rel(executor, metrics, "Reports execution/failures")
+Rel(camera_processors, metrics, "Reports tracker/rule/event latency")
+Rel(metrics, telemetry, "Exports bounded observations")
+
+SHOW_LEGEND()
+@enduml

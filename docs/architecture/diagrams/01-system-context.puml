@@ -1,0 +1,19 @@
+@startuml AVA_System_Context
+!include <C4/C4_Context>
+
+title AVA - System Context (current PoC)
+LAYOUT_LEFT_RIGHT()
+
+Person(operator, "Developer / analyst", "Configures and runs offline analytics; inspects events and video output")
+System(ava, "Adaptive Video Analytics", "Processes recorded video with conventional or prompted detection and configurable spatial/temporal rules")
+System_Ext(inputs, "Local input assets", "MP4 clips, YAML profiles, model weights and text encoder")
+System_Ext(gpu, "NVIDIA GPU runtime", "Docker Engine, NVIDIA Container Toolkit and one explicitly selected GPU")
+System_Ext(outputs, "Local result storage", "Detection/event JSONL, annotated MP4 and resolved snapshot/clip evidence")
+
+Rel(operator, ava, "Runs CLI and reviews results")
+Rel(ava, inputs, "Reads", "Read-only/configured mounts")
+Rel(ava, gpu, "Executes inference on", "CUDA")
+Rel(ava, outputs, "Writes", "Mounted filesystem")
+
+SHOW_LEGEND()
+@enduml

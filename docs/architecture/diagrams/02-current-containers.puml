@@ -1,0 +1,23 @@
+@startuml AVA_Current_Containers
+!include <C4/C4_Container>
+
+title AVA - Current Container View (E-1 / E-2 functional slice)
+LAYOUT_LEFT_RIGHT()
+
+Person(operator, "Developer / analyst", "Runs reproducible one-shot jobs")
+
+System_Boundary(ava, "Adaptive Video Analytics") {
+  Container(cli, "AVA CLI container", "Python 3.12, PyTorch, Ultralytics, OpenCV", "Sequential offline ingest, detection/tracking, rules, events and output")
+  ContainerDb(input_assets, "Input/model volumes", "Filesystem", "Read-only video/config plus persistent model assets")
+  ContainerDb(result_files, "Result volume", "Filesystem", "Detection/event JSONL, annotated MP4 and resolved snapshot/clip evidence")
+}
+
+System_Ext(gpu, "Selected NVIDIA GPU", "RTX 3090 through NVIDIA Container Toolkit")
+
+Rel(operator, cli, "Invokes", "docker compose run / ava run")
+Rel(cli, input_assets, "Reads")
+Rel(cli, gpu, "Runs inference", "CUDA")
+Rel(cli, result_files, "Writes")
+
+SHOW_LEGEND()
+@enduml

@@ -1,0 +1,39 @@
+@startuml AVA_Current_Components
+!include <C4/C4_Component>
+
+title AVA - CLI Container Components (current)
+LAYOUT_LEFT_RIGHT()
+
+Container_Boundary(cli, "AVA CLI container") {
+  Component(command, "CLI", "ava.cli", "Loads a run configuration and invokes orchestration")
+  Component(config, "Configuration", "ava.config / Pydantic", "Validates detector, camera and rule profiles")
+  Component(runner, "Run orchestrator", "ava.runner", "Wires the sequential pipeline and records summary metrics")
+  Component(ingest, "Video ingest", "ava.ingest / OpenCV", "Decodes MP4 frames and source-relative timestamps")
+  Component(detectors, "Detector adapters", "ava.detector / Ultralytics", "YOLO26 + ByteTrack or YOLOE prompted inference")
+  Component(rules, "Rule engine", "ava.rules", "Line crossing, zone entry and dwell state")
+  Component(events, "Event and evidence writer", "ava.events", "Versioned event JSONL plus centered snapshot/clip materialization")
+  Component(output, "Frame outputs", "ava.output", "Detection JSONL and annotated MP4")
+  Component(timing, "Measurement", "ava.timing", "CUDA-synchronized phase and memory metrics")
+}
+
+ContainerDb(assets, "Mounted assets", "Filesystem", "Video, YAML, weights")
+ContainerDb(results, "Mounted results", "Filesystem", "JSONL, evidence, MP4")
+System_Ext(gpu, "NVIDIA GPU", "Selected CUDA device")
+
+Rel(command, config, "Loads and validates")
+Rel(command, runner, "Starts run")
+Rel(runner, ingest, "Consumes frames")
+Rel(runner, detectors, "Requests detections/tracks")
+Rel(runner, rules, "Applies profiles")
+Rel(runner, events, "Persists rule events")
+Rel(runner, output, "Writes per-frame output")
+Rel(runner, timing, "Records phases")
+Rel(config, assets, "Reads YAML")
+Rel(ingest, assets, "Reads MP4")
+Rel(detectors, assets, "Reads model assets")
+Rel(detectors, gpu, "Runs inference")
+Rel(events, results, "Writes")
+Rel(output, results, "Writes")
+
+SHOW_LEGEND()
+@enduml

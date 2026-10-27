@@ -1,5 +1,9 @@
 # Private planning, design, backlog and session records are transferred manually.
-/docs/
+# (Stable public policy docs — tests_rules.md and architecture/ — are committed;
+# see ADR-10 for the current scope.)
+/docs/*
+!docs/tests_rules.md
+!docs/architecture/
 
 # Local runtime configuration; commit only sanitized examples.
 .env

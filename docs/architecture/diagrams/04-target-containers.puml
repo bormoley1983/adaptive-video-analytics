@@ -1,0 +1,71 @@
+@startuml AVA_Target_Containers
+!include <C4/C4_Container>
+
+title AVA - Proposed Product and Local Operations Containers (not implemented)
+LAYOUT_LEFT_RIGHT()
+
+Person(operator, "Operator / investigator", "Monitors processing, handles incidents and runs authorized investigations")
+System_Ext(vms, "VMS / camera estate", "Recording/playback authority and RTSP/H.264 analytic streams")
+System_Ext(idp, "Deployment identity provider", "Human and service identity tokens; tenant/site claims")
+System_Ext(consumer, "Optional external consumer", "Downstream alarm/workflow or future stream consumer")
+System_Ext(provider, "Optional analytics provider", "Replaceable backend behind an AVA port")
+System_Ext(local_ai, "Local AI through LiteLLM", "Existing Qwen service; bounded candidate enrichment, independently operated")
+System_Ext(kafka, "Deferred Kafka", "Preferred future retained/replayable event stream; inactive until ADR-15 gates pass")
+
+System_Boundary(ava, "Adaptive Video Analytics modular monolith and workers") {
+  Container(workers, "GPU video workers", "Python now; DeepStream/GStreamer + TensorRT candidate", "Decode, infer, track and apply compatible rules per authoritative camera assignment")
+  Container(control, "AVA API and control plane", "Python / FastAPI + Pydantic", "Presentation adapter over application use cases and domain ports for /api/v1")
+  Container(relay, "Outbox relay", "Python application adapter; deferred publisher", "Claims committed outbox records and invokes EventPublisher without blocking workers")
+  Container(verifier, "Optional enrichment worker", "AVA model or LiteLLM adapter", "Bounded event-triggered semantic observations")
+  Container(search, "Search / offline-analysis workers", "Capability-selected model/index adapters", "Bounded text/image search, OCR indexing and uploaded-video analysis")
+  Container(adapters, "External integration adapters", "AVA ports + anti-corruption mappings", "Translate optional contracts without leaking external DTOs into the domain")
+  Container(ui, "Minimal operator UI", "Server-rendered web + modest JavaScript", "Realtime monitoring, incident workflow, configuration and investigation through /api/v1 only")
+}
+
+System_Boundary(local_platform, "AVA-owned local Docker platform") {
+  ContainerDb(postgres, "PostgreSQL 18", "Canonical relational database", "Configuration, events, incidents, evidence metadata, audit and transactional outbox")
+  ContainerDb(seaweed, "SeaweedFS S3", "S3-compatible object storage", "Evidence clips/snapshots, uploads and exports; bytes only")
+  Container(prometheus, "Prometheus", "Metrics store", "Scrapes bounded AVA and infrastructure metrics")
+  Container(grafana, "Grafana", "Operations UI", "Provisioned metric and log dashboards")
+  Container(loki, "Loki", "Log store", "Central structured AVA/container logs")
+  Container(alloy, "Grafana Alloy", "Telemetry collector", "Discovers, redacts/labels and forwards Docker logs")
+}
+
+Rel(vms, workers, "Streams analytic video", "RTSP / H.264")
+Rel(workers, control, "Submits canonical facts/status", "AVA worker contract")
+Rel(workers, seaweed, "Stores enabled evidence through adapter", "S3 API")
+Rel(control, postgres, "Uses repositories and Unit of Work", "SQL")
+Rel(control, seaweed, "Resolves authorized evidence through adapter", "S3 API")
+Rel(relay, postgres, "Claims/records outbox attempts", "SQL")
+Rel(relay, kafka, "Publishes only after activation gates", "Kafka protocol")
+Rel(kafka, consumer, "Delivers retained stream to named consumers", "Versioned envelopes")
+Rel(verifier, local_ai, "Submits approved bounded requests", "LiteLLM API")
+Rel(verifier, control, "Returns correlated observations", "Application contract")
+Rel(control, search, "Submits bounded jobs", "Application port")
+Rel(search, seaweed, "Reads inputs / writes derived evidence", "S3 API")
+Rel(search, control, "Returns typed results/observations", "Application contract")
+Rel(operator, ui, "Reviews incidents", "HTTPS")
+Rel(ui, idp, "Authenticates", "OIDC")
+Rel(ui, control, "Commands, queries and realtime cursor", "HTTPS / WebSocket")
+Rel(control, idp, "Validates tokens/claims", "OIDC/JWKS")
+Rel(control, adapters, "Invokes external ports", "AVA domain contracts")
+Rel(adapters, consumer, "Publishes translated facts", "Agreed authenticated contract")
+Rel(adapters, provider, "Uses declared optional capabilities", "Provider API")
+
+Rel(prometheus, workers, "Scrapes", "HTTP /metrics")
+Rel(prometheus, control, "Scrapes", "HTTP /metrics")
+Rel(prometheus, relay, "Scrapes", "HTTP /metrics")
+Rel(prometheus, verifier, "Scrapes", "HTTP /metrics")
+Rel(prometheus, search, "Scrapes", "HTTP /metrics")
+Rel(alloy, workers, "Collects structured stdout logs", "Docker discovery")
+Rel(alloy, control, "Collects structured stdout logs", "Docker discovery")
+Rel(alloy, relay, "Collects structured stdout logs", "Docker discovery")
+Rel(alloy, verifier, "Collects structured stdout logs", "Docker discovery")
+Rel(alloy, search, "Collects structured stdout logs", "Docker discovery")
+Rel(alloy, loki, "Forwards bounded labeled logs", "Loki API")
+Rel(grafana, prometheus, "Queries metrics", "PromQL")
+Rel(grafana, loki, "Queries logs", "LogQL")
+Rel(operator, grafana, "Investigates operations", "Localhost-bound HTTP")
+
+SHOW_LEGEND()
+@enduml
