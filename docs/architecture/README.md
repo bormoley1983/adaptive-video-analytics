@@ -5,7 +5,7 @@ ADRs describe a decision, its alternatives, consequences, validation, and revisi
 | ADR | Decision | Status | Primary epics |
 |---|---|---|---|
 | [ADR-1](adr/ADR-1.md) | Python modular PoC and small initial stack | Accepted; E-1 validated | E-1/E-2 |
-| [ADR-2](adr/ADR-2.md) | DeepStream candidate and independent GPU workers | Proposed pending benchmarks | E-3/E-4 |
+| [ADR-2](adr/ADR-2.md) | DeepStream candidate and independent GPU workers | Candidate; compatibility partial, capacity pending | E-3/E-4/E-6 |
 | [ADR-3](adr/ADR-3.md) | Detector adapters and explicit prompt profiles | Accepted for PoC; export path provisional | E-1/E-3/E-5 |
 | [ADR-4](adr/ADR-4.md) | Configuration, time and rule semantics | Accepted; partially implemented | E-2/E-3 |
 | [ADR-5](adr/ADR-5.md) | Versioned events, evidence and staged integration | Event contract implemented; evidence integration incomplete | E-2/E-4/E-6 |
@@ -25,21 +25,14 @@ ADRs describe a decision, its alternatives, consequences, validation, and revisi
 
 ## Stack at a glance
 
-| Concern | Initial project: E-1/E-2 | Target implementation: E-3–E-7 |
-|---|---|---|
-| Execution | GPU container validated on `ai-host1`; one RTX 3090 used and the local-AI workload preserved | Containers on measured NVIDIA GPUs; multi-GPU only in approved windows |
-| Runtime | Python 3.12.3, torch 2.14.1+cu130, Ultralytics 8.4.183 measured; dependency lock still open in B-016 | Current stable DeepStream/GStreamer candidate; supported Python APIs; C++ for required plugins |
-| Decode | OpenCV/FFmpeg MP4 | NVDEC via DeepStream; MediaMTX/FFmpeg test RTSP |
-| Detection | Current stable PyTorch/Ultralytics; YOLO26n/s and YOLOE-26 small candidates | Current stable TensorRT; validated engines and explicit prompt-profile exports |
-| Tracking/rules | ByteTrack + Python rule state | NvDCF candidate, `nvdsanalytics` + custom temporal logic |
-| Contracts/config | Pydantic, JSON/YAML, JSONL outputs | Same versioned domain contracts and profile semantics |
-| Events/storage | Versioned JSONL events implemented; local evidence store exists | PostgreSQL 18/outbox is canonical for services; JSONL remains an export; SeaweedFS is the selected S3 evidence adapter |
-| Architecture | Small Python modules coordinated by CLI runners | Modular monolith: presentation, application and domain layers with infrastructure behind hexagonal ports; no mandatory facade |
-| Event delivery | None | PostgreSQL outbox first; Kafka is the preferred future stream adapter after explicit activation gates |
-| Async enrichment | None | Optional AVA-controlled model or bounded LiteLLM jobs when E-5/E-7 justify them |
-| UI | Annotated MP4 | Minimal FastAPI server-rendered incident view |
-| Observability | Benchmark JSON and E-3 runtime instrumentation in progress | Local Prometheus/Grafana and Loki/Alloy; bounded structured logs; GPU/decoder/host exporters after compatibility validation |
-| Packaging | Dockerfile + Compose + CLI with a validated dependency lock; private docs manually transferred | Separate pinned GPU runtime, RTSP harness and CPU-only operations Compose projects; external adapters later; no Kubernetes initially |
+The active and target stack is described in [STACK.md](../../STACK.md) (root of
+the repository). This section keeps only what the ADRs add: the initial E-1/E-2
+baseline was a small Python CLI with PyTorch/Ultralytics detection, ByteTrack
+tracking, JSONL events and annotated-MP4 output; the target implementation moves
+to DeepStream/GStreamer NVDEC decode, TensorRT inference, NvDCF tracking,
+PostgreSQL/outbox event storage and a modular monolith behind hexagonal ports.
+Proposed rows remain proposed until their owning epic gate accepts or revises
+them.
 
 This is the recommended fit for the stated hardware and delivery order, not an unconditional final stack. Apply [ADR-1](adr/ADR-1.md)'s latest mutually compatible stable policy to every component; an older version requires a documented reason. Accept or revise proposed ADRs at the owning epic gate. The original ideas document is historical input, not the authoritative version recommendation.
 
