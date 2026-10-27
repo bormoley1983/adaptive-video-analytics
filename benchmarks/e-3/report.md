@@ -221,7 +221,7 @@ not established by this conventional one-stream experiment.
 
 ---
 
-# E-3-T5: measured single-GPU multi-stream capacity sweep
+## E-3-T5: measured single-GPU multi-stream capacity sweep
 
 Status: **Sweep complete (16/16 points ran to completion); no point meets the
 4 FPS/camera pass gate.** Capacity is therefore **provisional**, not a passing

@@ -1,6 +1,7 @@
 # AVA agent instructions
 
-Applies to every model and client.
+Applies to every model and client (Qwen single-agent sessions and Codex
+multi-agent workers alike).
 
 ## Before work
 
@@ -27,9 +28,9 @@ Applies to every model and client.
   material diff or message change requires fresh approval.
 - Never commit directly to `develop`. All work lands on a task branch
   (`agent/<task>`), is reviewed through a merge request, and reaches `develop`
-  only via an explicitly human-approved merge. A direct commit already on
-  `develop` must not be rewritten or amended; leave it and apply this rule from
-  the next change onward.
+  only via an explicitly human-approved merge (fast-forward, merge-commit,
+  squash or rebase). A direct commit already on `develop` must not be rewritten
+  or amended; leave it and apply this rule from the next change onward.
 - Human gates are non-delegable. Silence, prior approvals, task instructions,
   test success and another agent's approval do not satisfy them. Agents stop at
   the gate and leave reviewable uncommitted changes when approval is absent.
@@ -48,102 +49,63 @@ Applies to every model and client.
 
 ## Tool-call discipline (dead-loop guard)
 
-**Hard pre-call gate — check before EVERY tool call, no exceptions:**
+Before EVERY tool call: never repeat a call identical to the immediately
+previous one (same tool, same parameters); no retry is permitted. An empty or
+unchanged result is a finding, not a failure — the next call must change at
+least one meaningful parameter (pattern, path, range), or stop and state the
+conclusion in plain text. After two distinct approaches yield no new
+information, report what was tried and what is unknown instead of probing
+further; three total attempts at the same goal is the hard maximum.
 
-1. Is this call identical to my immediately previous one (same tool, same
-   parameters)? If yes → STOP. Do not issue it. No retry is permitted.
-2. Did my last call return empty or unchanged output? If yes → treat that as a
-   finding, not a failure. The next call MUST change at least one meaningful
-   parameter, or I must stop and report the conclusion in plain text.
+When a stall occurs: stop and report (calls, results, why unchanged) without
+issuing another tool call in the same turn; classify the cause as environment
+(state changed externally — re-read with a different query), query mismatch
+(broaden or narrow one parameter, retry once) or genuine absence (state "X is
+not present in Y" and move on); before any retry targeting the same goal, name
+the specific parameter or precondition that changed since the last attempt —
+if none exists, the call is prohibited. If the retry also returns an unchanged
+result, stop entirely, report the full sequence and wait for direction.
 
-- Never repeat a tool call with identical parameters expecting a different
-  result. If the same call returns the same output twice, stop retrying it.
-- An empty or unchanged result is a finding, not a failure to re-poll. Act on
-  it: change the query, broaden or narrow scope, read the file directly, or
-  state the conclusion and move on.
-- Before issuing any tool call, confirm it differs from the immediately
-  previous one in at least one meaningful parameter (pattern, path, range).
-  If it does not differ, do not issue it.
-- Cap consecutive attempts at the same goal: after two distinct approaches
-  yield no new information, report what was tried and what is unknown instead
-  of continuing to probe.
-- Never truncate or filter the output of a long-running or hard-to-reproduce
-  command with an output-limiting pipe such as `| tail -N`, `| head -N`,
-  `| grep ...`, `2>&1 | ...`, or any `sed`/`awk`/`cut` that discards lines.
-  Builds, test runs, GPU workflows and installs can take minutes; limiting
-  their output hides progress, masks mid-stream failures, and destroys evidence
-  needed for review. Run the command so its full output is captured (let the
-  terminal buffer it, or redirect to a log file). If you need to search or
-  inspect a portion, do it as a separate step against the saved log file rather
-  than discarding lines at the source.
-
-### Loop recovery protocol
-
-When the dead-loop guard triggers (identical call repeated, or two distinct
-approaches yield no new information), the agent MUST:
-
-1. **Stop and report.** State in plain text: what was called, how many times,
-   what was returned each time, and why the result is unchanged. Do not issue
-   another tool call in the same turn as the report.
-
-2. **Diagnose the cause.** Classify the stall into exactly one of:
-   - *Environment*: the target state changed externally (file edited, process
-     restarted, network flap). Action: re-read the current state with a
-     different query or path before retrying.
-   - *Query mismatch*: the parameters are correct but the tool's scope doesn't
-     cover the target (wrong directory, wrong pattern, wrong line range).
-     Action: broaden or narrow one parameter and retry once.
-   - *Genuine absence*: the thing being searched for does not exist. Action:
-     state the conclusion explicitly ("X is not present in Y") and move on to
-     the next subtask. Do not retry.
-
-3. **State-change assertion.** Before issuing any tool call that targets the
-   same goal as the stalled sequence, the agent must name the specific
-   parameter or precondition that has changed since the last attempt. If no
-   such change exists, the call is prohibited.
-
-4. **Escalation cap.** If recovery step 2 yields a retry and that retry also
-   returns an unchanged result, the agent stops probing entirely, reports the
-   full sequence (calls, results, diagnosis) to the user, and waits for
-   direction. Three total attempts at the same goal is the hard maximum.
+Never truncate or filter the output of a long-running or hard-to-reproduce
+command with an output-limiting pipe (`| tail -N`, `| head -N`, `| grep ...`,
+`2>&1 | ...`, or any `sed`/`awk`/`cut` that discards lines). Builds, test runs,
+GPU workflows and installs can take minutes; limiting their output hides
+progress, masks mid-stream failures and destroys evidence needed for review.
+Capture full output (terminal buffer or log file); inspect a portion in a
+separate step against the saved log.
 
 ## Parallel work
 
-- Use one sibling worktree and branch per task:
-  `../ava-worktrees/<task>` and `agent/<task>`. Never share a worktree.
-- Create it from an explicit committed base. Other worktrees' uncommitted changes
-  are not inherited.
-- Assign each worker an outcome and owned files. Coordinate before scopes overlap.
-- Workers prepare focused, reviewable changes and validation evidence. After
-  the mandatory human commit approval, they may commit. The integrator obtains
-  the same approval before any merge or cherry-pick that writes a commit, then
-  resolves overlaps and runs combined validation.
-- Ignored assets are not copied. Share `docs/`, `videos/` and `models/` read-only
-  only when needed; keep `results/` local; never copy credentials.
-- Only the integrator edits shared private progress/handoff docs. Workers report
-  required doc changes in their handoff.
-- Clean up only after integration or explicit abandonment and artifact recovery.
-  Never force-remove another agent's work.
+- One sibling worktree and branch per task: `../ava-worktrees/<task>` and
+  `agent/<task>`, created from an explicit committed base; never share a
+  worktree. Other worktrees' uncommitted changes are not inherited.
+- Assign each worker one outcome and owned files; coordinate before scopes
+  overlap. Workers prepare focused, reviewable changes and validation evidence,
+  then commit only after the mandatory human approval of that exact commit.
+- Ignored assets are not copied. Share `docs/`, `videos/` and `models/`
+  read-only only when needed; keep `results/` local; never copy credentials.
+- Only the integrator edits shared private progress/handoff docs; workers
+  report required doc changes in their handoff. The integrator obtains the same
+  human approval before any commit-writing merge or cherry-pick, resolves
+  overlaps and runs combined validation.
+- Clean up only after integration or explicit abandonment and artifact
+  recovery. Never force-remove another agent's work.
 
 ## Task completion and integration
 
-- A task is not complete when its worker commit exists. It is complete only
-  after the branch is pushed, reviewed through a merge request, explicitly
-  approved by a human for merge, integrated into `develop`, and validated with
-  the combined `develop` state.
-- Agents must not merge their own work or infer merge approval from commit or
-  plan approval. Fast-forward, merge-commit, squash and rebase merges all require
-  explicit human confirmation immediately before updating `develop`.
-- After an approved merge, synchronize the `develop` worktree, run the affected
-  combined checks, and report the exact results. Remove the task worktree and
-  branch only after integration is verified and artifacts are recovered.
-- Post-merge cleanup: once a branch is merged into `develop`, confirm its tip is
-  an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`)
-  and that its worktree has no uncommitted changes, then remove the worktree
-  (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`),
-  and delete the remote branch (`git push origin --delete <branch>`). Use safe
-  `-d` deletes only; never force-remove a branch that is not fully merged. Prune
-  stale remote-tracking refs with `git fetch origin --prune`.
+- A task is complete only after its branch is pushed, reviewed through a merge
+  request, explicitly approved by a human for merge, integrated into `develop`,
+  and validated with the combined `develop` state — not when the worker commit
+  exists. Agents must not merge their own work or infer merge approval from
+  commit or plan approval.
+- After an approved merge: synchronize the `develop` worktree, run the affected
+  combined checks, report exact results. Then confirm the branch tip is an
+  ancestor of `origin/develop` (`git merge-base --is-ancestor <branch>
+  origin/develop`) and its worktree has no uncommitted changes; remove the
+  worktree (`git worktree remove <path>`), delete the local branch (`git branch
+  -d <branch>`) and the remote branch (`git push origin --delete <branch>`).
+  Safe `-d` deletes only; never force-remove a branch that is not fully merged.
+  Prune stale refs with `git fetch origin --prune`.
 
 ## Code and validation
 
