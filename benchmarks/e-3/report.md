@@ -229,9 +229,9 @@ limit. The valid dominant finding is that the relative source-PTS pacing gate
 quantizes a 4 FPS request on a 10 FPS source to about 3.33 FPS. The recorded
 buffer-drop, queue-age and event-latency values are invalid because the original
 instrumentation did not measure those contracts. See
-[Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window)
-and the parallel-investigation handoff at
-[`docs/handoff-e3-t5-fps-cap.md`](../../docs/handoff-e3-t5-fps-cap.md).
+[Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window);
+the parallel-investigation handoff lives in the private documentation tree
+(`docs/handoff-e3-t5-fps-cap.md`, not committed to this repository).
 
 ## Scope and method
 

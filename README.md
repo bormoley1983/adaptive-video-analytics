@@ -16,7 +16,9 @@ The E-3 capacity result remains provisional: the original sweep completed, but
 its pacing and queue instrumentation prevented a valid stable-capacity claim.
 DeepStream compatibility, the local observability stack and replay harness have
 measured evidence; databases and the product API/UI remain later work. See
-`docs/` (private, not in Git) for planning, ADRs and progress.
+`docs/` (mostly private, not in Git) for planning and progress; the stable
+architecture ADRs and test rules are committed under `docs/architecture/` and
+`docs/tests_rules.md`.
 
 The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
 serves the local-AI stack and one is shared by AVA and other projects. AVA must
@@ -87,4 +89,4 @@ declared media, models, container runtime, GPU or services. An empty selected
 suite exits as not collected rather than being treated as a pass. The coverage
 gate requires at least 90% combined line and branch coverage; meaningful tests
 of changed behavior remain more important than maximizing the percentage. See
-`docs/tests_rules.md` when the private documentation tree is available.
+`docs/tests_rules.md`.

@@ -1,0 +1,79 @@
+@startuml AVA_Future_API_Components
+!include <C4/C4_Component>
+
+title AVA - Future Modular-Monolith Layers and Hexagonal Adapters (not implemented)
+LAYOUT_LEFT_RIGHT()
+
+Person(client, "Authorized API/UI client", "Human or service identity scoped by tenant/site claims")
+
+Container_Boundary(api, "AVA API and control plane") {
+  Component_Boundary(presentation, "Presentation layer") {
+    Component(transport, "HTTP / WebSocket transport", "FastAPI + OpenAPI 3.1", "Validates transport DTOs; returns resources, problems, cursors and realtime references")
+    Component(policy, "Identity and policy adapter", "OIDC/JWKS + request context", "Maps authenticated claims and enforces transport/resource access")
+  }
+
+  Component_Boundary(application_layer, "Application layer") {
+    Component(use_cases, "Command/query use cases", "Focused application services", "Coordinates transactions, desired/observed state, events, incidents and jobs; no mandatory facade")
+    Component(uow_port, "Unit of Work / repository ports", "Application interfaces", "Atomic state and outbox intent; persistence-neutral domain results")
+    Component(event_sink_port, "EventSink port", "Application interface", "Optional portable event export without storage DTO leakage")
+    Component(worker_port, "Processing control port", "Application interface", "Desired actions, sessions, worker state and assignment epochs")
+    Component(evidence_port, "EvidenceStore port", "Application interface", "Byte lifecycle and authorized bounded access without backend paths")
+    Component(search_port, "Search provider port", "Application interface", "Capability-gated text/image/OCR/offline jobs and results")
+    Component(publisher_port, "EventPublisher port", "Application interface", "Versioned at-least-once envelopes from committed outbox work")
+  }
+
+  Component_Boundary(domain_layer, "Domain layer") {
+    Component(domain, "Domain model and policies", "Plain Python", "Events, observations, profiles, incidents, evidence metadata, revisions and lifecycle state machines")
+  }
+
+  Component_Boundary(infrastructure, "Infrastructure adapters") {
+    Component(postgres_adapter, "PostgreSQL adapter", "Repositories + Unit of Work", "Migrations, canonical state, deduplication and transactional outbox")
+    Component(jsonl_adapter, "JSONL export adapter", "EventSink", "Portable benchmark/debug output; never the service source of truth")
+    Component(seaweed_adapter, "SeaweedFS S3 adapter", "S3EvidenceStore", "Stores/reads/deletes bytes and creates bounded authorized access")
+    Component(worker_adapter, "Worker adapter", "AVA worker contract", "Maps desired control and observed processing state")
+    Component(provider_adapter, "Provider/search adapters", "Anti-corruption mappings", "Translate optional backend capabilities and DTOs")
+    Component(outbox_relay, "Outbox relay", "Background application adapter", "Claims committed rows and invokes EventPublisher with bounded leases/retries")
+    Component(kafka_adapter, "Kafka publisher adapter", "Deferred EventPublisher implementation", "Publishes only after ADR-15 activation gates")
+    Component(telemetry_adapter, "Telemetry adapters", "Prometheus + structured stdout", "Expose bounded metrics/logs without leaking telemetry types inward")
+  }
+}
+
+ContainerDb(postgres, "AVA PostgreSQL", "PostgreSQL 18", "Canonical configuration, state, events, incidents, evidence metadata, audit and outbox")
+ContainerDb(objects, "AVA evidence objects", "SeaweedFS S3", "Evidence, search attachments, uploads and exports")
+System_Ext(idp, "Deployment identity provider", "OIDC/JWKS and service identities")
+System_Ext(worker, "AVA processing workers", "Python PoC and later DeepStream adapters")
+System_Ext(search_backend, "Search / analysis backend", "Local measured backend or optional provider")
+System_Ext(kafka, "Deferred Kafka", "Retained/replayable event stream after explicit activation")
+System_Ext(consumer, "Named future stream consumer", "Idempotent consumer of versioned AVA envelopes")
+System_Ext(telemetry, "Prometheus / Alloy", "Scrapes metrics and collects structured stdout logs")
+
+Rel(client, transport, "Uses", "HTTPS / WebSocket")
+Rel(transport, policy, "Requests identity/resource context")
+Rel(policy, idp, "Validates issuer and keys", "OIDC/JWKS")
+Rel(transport, use_cases, "Invokes one validated command/query")
+Rel(use_cases, domain, "Applies domain policies and transitions")
+Rel(use_cases, uow_port, "Uses transaction/repository contracts")
+Rel(use_cases, event_sink_port, "Exports when configured")
+Rel(use_cases, worker_port, "Uses")
+Rel(use_cases, evidence_port, "Uses")
+Rel(use_cases, search_port, "Uses")
+Rel(use_cases, publisher_port, "Uses only from relay workflow")
+
+Rel(uow_port, postgres_adapter, "Implemented by")
+Rel(postgres_adapter, postgres, "Persists canonical state + outbox", "SQL")
+Rel(event_sink_port, jsonl_adapter, "Implemented by")
+Rel(evidence_port, seaweed_adapter, "Implemented by")
+Rel(seaweed_adapter, objects, "Stores/resolves bytes", "S3 API")
+Rel(worker_port, worker_adapter, "Implemented by")
+Rel(worker_adapter, worker, "Reconciles desired/observed state", "AVA worker contract")
+Rel(search_port, provider_adapter, "Implemented by")
+Rel(provider_adapter, search_backend, "Submits bounded work", "Provider API")
+Rel(outbox_relay, postgres, "Claims/records delivery attempts", "SQL")
+Rel(outbox_relay, publisher_port, "Publishes committed envelopes through")
+Rel(publisher_port, kafka_adapter, "Implemented by after activation")
+Rel(kafka_adapter, kafka, "Publishes versioned envelopes", "Kafka protocol")
+Rel(kafka, consumer, "Delivers by consumer group", "Partitioned stream")
+Rel(telemetry_adapter, telemetry, "Exports metrics / structured logs")
+
+SHOW_LEGEND()
+@enduml
