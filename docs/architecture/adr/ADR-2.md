@@ -1,6 +1,6 @@
 # ADR-2: candidate DeepStream data path and independent GPU workers
 
-Date: 2026-10-19 · Status: Proposed pending E-3 compatibility/quality gate · Scope: E-3/E-4/E-6.
+Date: 2026-10-19 · Revised: 2026-10-27 (T5 sweep and decode-ladder evidence) · Status: Candidate path; compatibility partially validated, capacity pending · Scope: E-3/E-4/E-6.
 
 ## Context and decision
 
@@ -45,7 +45,11 @@ E-3-T2 first validates four independent replay streams, stable identities,
 declared rates and reconnect after publisher/server restarts. E-3 then validates
 a complete supported host/container matrix, one-stream sample, detector parity,
 prompt export and measured stable limits before migration. E-4 measures scaling
-and recovery. Revise if compatibility, quality, licensing or operational cost
-fails, or if target hardware moves away from NVIDIA.
+and recovery. As of 2026-10-27: the T5 sweep ran all 16 points (no passing
+capacity point yet) and the DeepStream decode/resize ladders passed at 4–50
+streams, disproving an eight-stream decode ceiling for that path; model export,
+parser parity and a valid capacity rerun remain open. Revise if compatibility,
+quality, licensing or operational cost fails, or if target hardware moves away
+from NVIDIA.
 
 References checked 2026-10-19: NVIDIA [installation/compatibility matrix](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_Installation.html), [Python Service Maker](https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_service_maker_python.html), [DeepStream repository and build guidance](https://github.com/NVIDIA/deepstream), [MediaMTX introduction](https://mediamtx.org/docs/kickoff/introduction). Prefer the latest mutually compatible stable stack; document any older-version exception and preserve existing workloads.
