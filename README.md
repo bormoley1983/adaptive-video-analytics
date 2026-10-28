@@ -22,6 +22,12 @@ measured evidence; databases and the product API/UI remain later work. See
 architecture ADRs and test rules are committed under `docs/architecture/` and
 `docs/tests_rules.md`.
 
+The batching foundation provides correlated detection/tracker interfaces and a
+CPU-tested fair scheduler with bounded candidates, in-flight work and shutdown.
+Live activation and the real single-model executor remain pending. The
+`run-e3-*-conv-batched.yaml` examples are pending configurations and are rejected
+by the current live configuration validator.
+
 The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
 serves the local-AI stack and one is shared by AVA and other projects. AVA must
 measure live allocation before a run. The GPUs may be configured as a temporary
