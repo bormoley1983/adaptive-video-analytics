@@ -1,0 +1,42 @@
+# Short GPU-0 smoke for the conventional batched live path.
+
+detector:
+  kind: conventional
+  model: models/yolo26n.pt
+  confidence: 0.35
+  iou: 0.5
+gpu: "0"
+output_dir: results/e3-smoke-4-conv-batched-fixed
+
+live:
+  backend: opencv
+  parallel_open: true
+  detector_mode: batched
+  buffer_size: 40
+  reconnect_max: 3
+  reconnect_delay_s: 1.0
+  duration_s: 60
+
+  batch:
+    max_batch_size: 4
+    max_wait_ms: 20.0
+    readiness_timeout_s: 30.0
+    warmup_s: 5.0
+
+  telemetry:
+    prometheus_port: 9464
+    prometheus_host: "0.0.0.0"
+
+  cameras:
+    - id: cam-01
+      url: rtsp://127.0.0.1:8554/cam-01
+      analysis_fps: 10.0
+    - id: cam-02
+      url: rtsp://127.0.0.1:8554/cam-02
+      analysis_fps: 10.0
+    - id: cam-03
+      url: rtsp://127.0.0.1:8554/cam-03
+      analysis_fps: 10.0
+    - id: cam-04
+      url: rtsp://127.0.0.1:8554/cam-04
+      analysis_fps: 10.0

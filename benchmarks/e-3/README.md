@@ -8,6 +8,12 @@ event-latency outputs are retained only as invalid historical measurements.
 The report also records short corrected-flow diagnostics at 4 and 10 FPS per
 camera; both met their targets without queue drops or worker errors.
 
+The [corrected batch-8/16 comparison](batch-comparison.md) records separate
+50-camera, 60-second inference points at approximately 10 FPS per camera.
+Both pass the short diagnostic checks; batch 8 serves this load with less VRAM.
+The report separates process CPU from host load and records partial batches,
+queue accounting and the limits on capacity and production acceptance.
+
 ## Device visibility
 
 On this host/image, `--gpus device=0` makes native NVDEC return error 100 even
