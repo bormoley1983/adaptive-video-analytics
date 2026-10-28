@@ -15,7 +15,13 @@ multi-agent workers alike).
 5. Present the resulting plan and wait for explicit human confirmation before
    editing files or taking implementation actions. The original task request is
    not plan confirmation, and an agent cannot provide or infer this approval.
-6. Preserve unrelated work. Do not reformat, rename or overwrite active files.
+6. Persist every confirmed plan to a `.md` doc under `docs/dev-plan/` (one file
+   per bounded subtask) before starting implementation: record the confirmed
+   scope, ordered validation gates with their current status, guardrails, and
+   the exact next action. Update that same doc as each gate completes so any
+   agent can resume from the written checkpoint instead of re-deriving it. Keep
+   private evidence out of Git; the plan doc references evidence by path only.
+7. Preserve unrelated work. Do not reformat, rename or overwrite active files.
 
 ## Mandatory human gates
 
