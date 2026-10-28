@@ -1,9 +1,18 @@
 """AVA API package.
 
-Common types and OpenAPI schema loading. No FastAPI, no routes —
-schema-only. FastAPI arrives with F-1-S2.
+Common types, OpenAPI schema loading, and FastAPI application factory.
+S2 adds the first four routes: /health/live, /health/ready, /version, /capabilities.
 """
 
+from .app import AppConfig, create_app
+from .dto import (
+    CapabilitiesResponse,
+    CapabilityEntry,
+    LivenessResponse,
+    ReadinessDependency,
+    ReadinessResponse,
+    VersionResponse,
+)
 from .schema import (
     Binding,
     CameraId,
@@ -41,8 +50,11 @@ from .schema import (
 )
 
 __all__ = [
+    "AppConfig",
     "Binding",
     "CameraId",
+    "CapabilitiesResponse",
+    "CapabilityEntry",
     "Confidence",
     "ConfidenceKind",
     "DeliverySubscriptionId",
@@ -56,6 +68,7 @@ __all__ = [
     "JobFailure",
     "JobId",
     "JobState",
+    "LivenessResponse",
     "MediaAssetId",
     "MessageId",
     "NormalizedBox",
@@ -64,6 +77,8 @@ __all__ = [
     "PageResponse",
     "ProblemDetail",
     "ProfileId",
+    "ReadinessDependency",
+    "ReadinessResponse",
     "ResourceEnvelope",
     "SchemaVersion",
     "SearchId",
@@ -71,7 +86,9 @@ __all__ = [
     "SiteId",
     "SourceTime",
     "TenantId",
+    "VersionResponse",
     "WorkerId",
+    "create_app",
     "load_schema",
     "schema_components",
 ]

@@ -84,9 +84,12 @@ class TestOpenAPIDocument:
         }
         assert expected.issubset(schemas.keys())
 
-    def test_paths_is_empty(self):
+    def test_paths_contains_s2_endpoints(self):
+        """S2 adds the four system endpoints; verify they are present."""
         doc = load_schema(OPENAPI_PATH)
-        assert doc.get("paths") == {}
+        paths = doc.get("paths", {})
+        expected = {"/health/live", "/health/ready", "/version", "/capabilities"}
+        assert expected.issubset(paths.keys())
 
     def test_rejects_nonexistent_file(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):

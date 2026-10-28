@@ -5,10 +5,61 @@ info:
   description: |
     Control and observation plane for adaptive video analytics.
     Contract family: ava.api/v1.
-    This document defines common types only; endpoint paths are added in F-1-S2.
 servers:
   - url: /api/v1
-paths: {}
+paths:
+  /health/live:
+    get:
+      operationId: healthLive
+      summary: Process liveness
+      description: No dependency probes; may be exposed only on the management network.
+      tags: [system]
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LivenessResponse"
+  /health/ready:
+    get:
+      operationId: healthReady
+      summary: API readiness
+      description: Reports dependency categories without secrets.
+      tags: [system]
+      responses:
+        "200":
+          description: Readiness state (200 even when not ready; body indicates state).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+  /version:
+    get:
+      operationId: getVersion
+      summary: Build/contract/runtime manifest
+      description: Includes API version and build identity.
+      tags: [system]
+      responses:
+        "200":
+          description: Version manifest.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+  /capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Supported features and bounded limits
+      description: Includes rule/search/OCR/upload/evidence and backend capability IDs.
+      tags: [system]
+      responses:
+        "200":
+          description: Capability list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
 components:
   schemas:
     # ── Versioning ──────────────────────────────────────────────────────
@@ -375,3 +426,95 @@ components:
         external_id:
           type: string
           description: The ID in the external system.
+
+    # ── S2 endpoint response schemas ────────────────────────────────────
+    LivenessResponse:
+      type: object
+      description: Process liveness response.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [alive]
+          examples: [alive]
+
+    ReadinessDependency:
+      type: object
+      description: A single dependency entry in the readiness response.
+      required: [name, state]
+      properties:
+        name:
+          type: string
+          description: Dependency name.
+          examples: [postgresql]
+        state:
+          type: string
+          enum: [ready, degraded, unavailable, stale, unknown]
+          examples: [ready]
+        detail:
+          type: string
+          nullable: true
+          description: Human-readable detail (no secrets/paths).
+        checked_at:
+          $ref: "#/components/schemas/Instant"
+          nullable: true
+
+    ReadinessResponse:
+      type: object
+      description: API readiness response.
+      required: [ready, dependencies]
+      properties:
+        ready:
+          type: boolean
+          examples: [true]
+        dependencies:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReadinessDependency"
+
+    VersionResponse:
+      type: object
+      description: Build/contract/runtime version manifest.
+      required: [package_version, contract_version, python_version]
+      properties:
+        package_version:
+          type: string
+          examples: ["0.1.0"]
+        contract_version:
+          type: string
+          examples: ["1.0.0"]
+        python_version:
+          type: string
+          examples: ["3.12.4"]
+
+    CapabilityEntry:
+      type: object
+      description: A single capability entry.
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          examples: [events.read]
+        name:
+          type: string
+          examples: [Event reading]
+        available:
+          type: boolean
+          examples: [true]
+        limits:
+          type: object
+          additionalProperties: true
+          description: Bounded limits for this capability.
+        detail:
+          type: string
+          nullable: true
+
+    CapabilitiesResponse:
+      type: object
+      description: Capability list response.
+      required: [capabilities]
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityEntry"
