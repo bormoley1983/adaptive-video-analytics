@@ -1,0 +1,10 @@
+services:
+  ava:
+    networks:
+      - default
+      - ava-ops
+
+networks:
+  ava-ops:
+    external: true
+    name: ava-ops_default

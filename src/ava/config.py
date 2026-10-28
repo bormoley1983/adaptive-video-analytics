@@ -356,6 +356,27 @@ class LiveCameraConfig(BaseModel):
         return value
 
 
+class PersistenceConfig(BaseModel):
+    """Event persistence backend: "postgres" (default) or "jsonl"."""
+
+    backend: Literal["jsonl", "postgres"] = "postgres"
+    dsn: str | None = None  # defaults to $AVA_PG_DSN; required for postgres
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_dsn_from_env(cls, data: dict) -> dict:
+        """Fall back to the AVA_PG_DSN environment variable."""
+        if data.get("dsn") is None:
+            env_dsn = os.environ.get("AVA_PG_DSN")
+            if env_dsn:
+                data = {**data, "dsn": env_dsn}
+        return data
+
+    @model_validator(mode="after")
+    def _validate_dsn(self) -> PersistenceConfig:
+        return self  # DSN enforced at sink construction, not config load
+
+
 class LiveRunConfig(BaseModel):
     """Configuration for a live multi-camera RTSP run."""
 
@@ -383,6 +404,8 @@ class LiveRunConfig(BaseModel):
     duration_s: float = Field(0.0, ge=0.0)
     # Optional structured-log / Prometheus surface (B-021).
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    # Event persistence backend. Defaults to PostgreSQL.
+    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     # Live cameras.
     cameras: list[LiveCameraConfig] = Field(default_factory=list)
     # Rule profiles (shared with file-based runs).
@@ -416,6 +439,7 @@ class RunConfig(BaseModel):
 
     # Schema version recorded in events (ADR-5).
     schema_version: str = CONFIG_SCHEMA_VERSION
+    run_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     source: Path | None = None
     detector: DetectorConfig | None = None
     output_dir: Path = Path("results")
@@ -429,6 +453,8 @@ class RunConfig(BaseModel):
     # Rule-driven camera configuration (ADR-4).
     cameras: list[CameraConfig] = Field(default_factory=list)
     profiles: list[RuleProfile] = Field(default_factory=list)
+    # Event persistence backend. Defaults to PostgreSQL.
+    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
 
     @model_validator(mode="after")
     def _resolve_references(self) -> RunConfig:

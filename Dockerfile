@@ -29,6 +29,8 @@ WORKDIR /app
 # versions exactly and a moving @main ref can never drift.
 COPY pyproject.toml README.md requirements.lock.txt ./
 COPY src ./src
+COPY alembic.ini ./
+COPY alembic ./alembic
 RUN python3.12 -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install -r requirements.lock.txt \

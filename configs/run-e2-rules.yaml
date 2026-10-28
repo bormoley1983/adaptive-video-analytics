@@ -5,6 +5,8 @@ schema_version: "1"
 source: /videos/input.mp4
 gpu: "0"
 output_dir: /results/e2-rules
+persistence:
+  backend: jsonl
 jsonl: true
 annotate: true
 

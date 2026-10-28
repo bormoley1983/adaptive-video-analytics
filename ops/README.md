@@ -2,32 +2,35 @@
 
 CPU-only Docker Compose project for AVA's local operational dependencies,
 separate from the GPU analytics worker and the RTSP replay harness
-(ADR-15). Services: **Prometheus** (metrics), **Grafana** (dashboards),
+(ADR-15). Services: **PostgreSQL** (events), **Prometheus** (metrics), **Grafana** (dashboards),
 **Loki** (logs), **Alloy** (Docker log discovery/forwarding).
 
 ## Lifecycle
 
 ```bash
-cp ops/.env.example ops/.env        # set GRAFANA_ADMIN_PASSWORD
+cp ops/.env.example ops/.env        # set GRAFANA_ADMIN_PASSWORD and POSTGRES_PASSWORD
 docker compose -f ops/docker-compose.yml up -d
 docker compose -f ops/docker-compose.yml ps          # health status
 docker compose -f ops/docker-compose.yml logs -f alloy   # collection debug
 docker compose -f ops/docker-compose.yml down         # stop (volumes persist)
 ```
 
-State persists in named volumes (`ops-prometheus`, `ops-loki`, `ops-grafana`).
+State persists in named volumes (`ops-postgres`, `ops-prometheus`, `ops-loki`, `ops-grafana`).
 `down` without `-v` keeps data; restarts reload it.
 
 ## Ports (all bound to 127.0.0.1 only)
 
 | Service    | Host port | Purpose                          |
 |------------|-----------|----------------------------------|
+| PostgreSQL | 5432      | Event persistence                |
 | Grafana    | 3000      | Dashboards, log search           |
 | Prometheus | 9090      | Metrics queries, target health   |
 | Loki       | 3100      | Log API (used by Grafana/Alloy)  |
 
 Service-to-service traffic uses the `ava-ops` project network; no service is
 reachable from the LAN.
+The optional worker Compose override joins that network for PostgreSQL access;
+see the root README for its invocation.
 
 ## AVA scrape target
 

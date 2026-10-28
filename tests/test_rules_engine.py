@@ -408,3 +408,16 @@ def test_multiple_discontinuities_increment_session() -> None:
     # Second discontinuity.
     engine.process_frame(frame(2, 200.0, [det(1, 0.2, 0.3)]), "synthetic-2")
     assert engine.session_id == "s3"
+
+
+def test_discontinuities_preserve_run_and_reconnect_identity() -> None:
+    first = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="run-a-s1")
+    other_run = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="run-b-s1")
+    reconnect = RuleEngine([_crossing_rule()], camera_id="cam-01", session_id="run-a-s2")
+    for engine in (first, other_run, reconnect):
+        engine.reset_session()
+    assert {first.session_id, other_run.session_id, reconnect.session_id} == {
+        "run-a-s1-d1", "run-b-s1-d1", "run-a-s2-d1"
+    }
+    first.reset_session()
+    assert first.session_id == "run-a-s1-d2"

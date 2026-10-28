@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 class TimeBasis(str):
-    """How the frame's capture time was derived (ADR-4 / K-safety C-02)."""
+    """How the frame's capture time was derived (ADR-4)."""
 
     LIVE_EPOCH = "live_epoch"
     REPLAY_SYNTHETIC = "replay_synthetic"
@@ -27,7 +27,7 @@ class Frame:
     seconds from session start for live). ``capture_utc`` is the real-world
     capture time in ISO-8601 UTC when known; ``time_basis`` labels how it was
     derived so consumers can distinguish a live camera's epoch from a
-    replayed file's synthetic value (ADR-4, K-safety C-02).
+    replayed file's synthetic value (ADR-4).
     """
 
     index: int

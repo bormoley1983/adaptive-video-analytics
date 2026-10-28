@@ -29,10 +29,11 @@ from pathlib import Path
 
 from .config import CONFIG_SCHEMA_VERSION, DetectorConfig, LiveRunConfig
 from .detector import Detector
-from .events import EventRecord, EventWriter, EvidenceLocator
+from .events import EventRecord, EvidenceLocator
 from .ingest import Frame
 from .live_ingest import LiveSourceConfig, iter_live_frames
 from .live_metrics import CameraMetrics, LiveMetricsCollector
+from .persistence.ports import EventSink
 from .rules import RuleEngine
 from .telemetry import Telemetry, new_run_context, serve_metrics
 
@@ -130,12 +131,13 @@ class _CameraWorker:
         detector: Detector,
         detector_lock: threading.Lock | None,
         rules: list,
-        event_writer: EventWriter,
+        event_writer: EventSink,
         buffer_size: int,
         model_ref: str | None,
         metrics: CameraMetrics | None = None,
         slow_sink_s: float = 0.0,
         telemetry: Telemetry | None = None,
+        on_sink_error=None,
     ) -> None:
         self.cam = cam_config
         self.source_config = source_config
@@ -147,6 +149,7 @@ class _CameraWorker:
         self.model_ref = model_ref
         self.slow_sink_s = slow_sink_s
         self.telemetry = telemetry
+        self.on_sink_error = on_sink_error
 
         self.stats = CameraStats(camera_id=cam_config.id)
         self.metrics = metrics or CameraMetrics(camera_id=cam_config.id)
@@ -279,12 +282,18 @@ class _CameraWorker:
                     )
                     if self.slow_sink_s > 0:
                         time.sleep(self.slow_sink_s)
-                    self.event_writer.write(record)
-                    self.stats.events_emitted += 1
-                    event_latency = time.perf_counter() - queued.enqueued_at
-                    self.metrics.record_event(event_latency)
-                    if self.telemetry is not None:
-                        self.telemetry.record_event(self.cam.id, event_latency)
+                    try:
+                        inserted = self.event_writer.write(record)
+                    except Exception as exc:
+                        if self.on_sink_error is not None:
+                            self.on_sink_error(exc)
+                        raise
+                    if inserted:
+                        self.stats.events_emitted += 1
+                        event_latency = time.perf_counter() - queued.enqueued_at
+                        self.metrics.record_event(event_latency)
+                        if self.telemetry is not None:
+                            self.telemetry.record_event(self.cam.id, event_latency)
 
             if self._producer_error is not None:
                 raise self._producer_error
@@ -321,9 +330,28 @@ def run_live(
         while (output_dir / f"events-{counter}.jsonl").exists():
             counter += 1
         events_path = output_dir / f"events-{counter}.jsonl"
-    event_writer = EventWriter(events_path)
 
-    # Build detector(s).
+    from .persistence.compose import build_event_sink
+    event_writer: EventSink = build_event_sink(
+        live_config.persistence, jsonl_path=events_path
+    )
+
+    try:
+      return _run_live_body(
+          live_config, detector_config, output_dir, gpu, event_writer
+      )
+    finally:
+      event_writer.close()
+
+
+def _run_live_body(
+    live_config: LiveRunConfig,
+    detector_config: DetectorConfig,
+    output_dir: Path,
+    gpu: str | None,
+    event_writer: EventSink,
+) -> LiveRunSummary:
+    """Inner body of run_live; the sink is closed by the caller's finally."""
     common = {
         "model_path": detector_config.model,
         "device": gpu,
@@ -350,6 +378,15 @@ def run_live(
 
     workers: list[_CameraWorker] = []
     threads: list[threading.Thread] = []
+    sink_errors: list[Exception] = []
+    sink_error_lock = threading.Lock()
+
+    def stop_for_sink_error(exc: Exception) -> None:
+        with sink_error_lock:
+            if not sink_errors:
+                sink_errors.append(exc)
+        for worker in workers:
+            worker.stop()
 
     for i, cam in enumerate(live_config.cameras):
         rules = []
@@ -394,12 +431,13 @@ def run_live(
             buffer_size=live_config.buffer_size,
             model_ref=model_ref,
             slow_sink_s=live_config.slow_sink_s,
+            on_sink_error=stop_for_sink_error,
         )
         workers.append(worker)
         t = threading.Thread(target=worker.run, name=f"ava-live-{cam.id}", daemon=True)
         threads.append(t)
 
-    # Metrics collector (E-3-T4).
+    # Metrics collector.
     collector = LiveMetricsCollector(
         gpu_index=gpu or "0",
         sample_interval_s=live_config.metrics_interval_s,
@@ -453,6 +491,12 @@ def run_live(
 
     def _sampler_loop() -> None:
         while not sampler_stop.is_set():
+            if hasattr(event_writer, "check_connection"):
+                try:
+                    event_writer.check_connection()
+                except Exception as exc:  # noqa: BLE001 - stop on any sink failure
+                    stop_for_sink_error(exc)
+                    return
             collector.sample_host()
             for worker in workers:
                 cam_id = worker.cam.id
@@ -497,10 +541,11 @@ def run_live(
         duration_timer.cancel()
 
     sampler_stop.set()
-    sampler_thread.join(timeout=2.0)
+    sampler_thread.join()
 
     wall = time.perf_counter() - start
-    event_writer.close()
+    if sink_errors:
+        raise RuntimeError("Event persistence failed; live run stopped") from sink_errors[0]
 
     # Write metrics.
     for cam in live_config.cameras:
@@ -541,7 +586,8 @@ def run_live(
         cameras=[w.stats for w in workers],
         wall_seconds=wall,
         total_events=sum(w.stats.events_emitted for w in workers),
-        output_paths=[str(events_path), str(metrics_path)],
+        output_paths=([str(event_writer.path)] if hasattr(event_writer, "path") else [])
+        + [str(metrics_path)],
     )
     return summary
 

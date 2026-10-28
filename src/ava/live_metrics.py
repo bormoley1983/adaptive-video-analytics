@@ -1,4 +1,4 @@
-"""Per-camera and host metric collection for live runs (E-3-T4).
+"""Per-camera and host metric collection for live runs.
 
 Collects:
 - Per-camera: input/analyzed FPS, queue depth/age, drops by reason,

@@ -1,4 +1,4 @@
-"""Unit tests for live metric collection (E-3-T4)."""
+"""Unit tests for live metric collection."""
 
 from __future__ import annotations
 

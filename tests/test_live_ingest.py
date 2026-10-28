@@ -85,7 +85,7 @@ class TestIterLiveFrames:
             assert isinstance(frame, Frame)
             assert frame.index == i
             assert frame.bgr.shape == (480, 640, 3)
-            assert frame.session_id == "s1"
+            assert frame.session_id.endswith("-s1")
 
     def test_timestamps_use_fps(self, monkeypatch):
         frames = _make_frames(3)
@@ -126,7 +126,10 @@ class TestIterLiveFrames:
         # 2 frames from first open + 2 from second open = 4 total.
         assert len(result) == 4
         assert call_count == 3  # third attempt failed and stopped
-        assert [frame.session_id for frame in result] == ["s1", "s1", "s2", "s2"]
+        # Session IDs have a run-scoped prefix; check the suffix pattern.
+        sids = [frame.session_id for frame in result]
+        assert all(s.endswith("-s1") for s in sids[:2])
+        assert all(s.endswith("-s2") for s in sids[2:])
 
     def test_stops_after_reconnect_budget(self, monkeypatch):
         """Exhausting reconnect_max stops the iterator."""
@@ -185,8 +188,10 @@ class TestIterLiveFrames:
         list(iter_live_frames(config))
 
         # One mid-stream reconnect (after first batch ends) and one open-failure
-        # reconnect (third open raises).
-        assert calls == [(1, "s2"), (2, "s3")]
+        # reconnect (third open raises). Session IDs have a run-scoped prefix.
+        assert len(calls) == 2
+        assert calls[0][0] == 1 and calls[0][1].endswith("-s2")
+        assert calls[1][0] == 2 and calls[1][1].endswith("-s3")
 
     def test_reconnect_callback_fires_on_open_failure(self, monkeypatch):
         """Open failure invokes the callback before the backoff sleep."""
@@ -208,7 +213,9 @@ class TestIterLiveFrames:
         result = list(iter_live_frames(config))
 
         assert result == []
-        assert calls == [(1, "s2"), (2, "s3")]
+        assert len(calls) == 2
+        assert calls[0][0] == 1 and calls[0][1].endswith("-s2")
+        assert calls[1][0] == 2 and calls[1][1].endswith("-s3")
 
     def test_no_callback_without_disconnects(self, monkeypatch):
         """A clean stream that ends without reconnect budget fires no callback."""

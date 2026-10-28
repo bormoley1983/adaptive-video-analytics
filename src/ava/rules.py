@@ -187,6 +187,8 @@ class RuleEngine:
         # Per-rule occurrence counters for stable event IDs.
         self._occurrences: dict[tuple[str, int, str], int] = {}
         self._last_frame_time: float | None = None
+        self._initial_session_id = session_id
+        self._discontinuity_count = 0
 
     # -- public API ---------------------------------------------------------
 
@@ -238,12 +240,15 @@ class RuleEngine:
         self._occurrences.clear()
         self._session_discontinuous = True
         # Increment the session counter: "s1" -> "s2", "s2" -> "s3", etc.
-        _, _, num = self.session_id.rpartition("s")
-        if num.isdigit():
-            self.session_id = f"s{int(num) + 1}"
+        self._discontinuity_count += 1
+        if "-s" in self._initial_session_id:
+            self.session_id = f"{self._initial_session_id}-d{self._discontinuity_count}"
         else:
-            # Fallback for non-standard session IDs.
-            self.session_id = f"{self.session_id}-2"
+            _, _, num = self.session_id.rpartition("s")
+            if num.isdigit():
+                self.session_id = f"s{int(num) + 1}"
+            else:
+                self.session_id = f"{self.session_id}-2"
 
     # -- internals ----------------------------------------------------------
 
