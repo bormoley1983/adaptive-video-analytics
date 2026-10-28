@@ -1,6 +1,6 @@
 # Adaptive Video Analytics (AVA)
 
-Technology overview: [STACK.md](STACK.md).
+Technology overview and versioning specification: [STACK.md](STACK.md).
 
 AVA is an independent, free/self-hosted video-analytics learning project. Its
 mission is to build useful low-cost analytics, measure real capability and

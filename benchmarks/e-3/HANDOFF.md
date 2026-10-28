@@ -1,6 +1,6 @@
 # Conventional DeepStream compatibility checkpoint
 
-Date: 2026-10-24, Asia/Jerusalem.
+Date: 2026-10-24.
 Branch: `agent/e3-t1-compat-spike`.
 Base: `15c5c3829e5eb65963725f8e1b9b9e8d7f2d1635`.
 Worktree: `/home/admaccess/ava-worktrees/e3-t1-compat-spike`.
