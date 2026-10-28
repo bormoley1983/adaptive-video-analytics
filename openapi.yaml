@@ -1,0 +1,377 @@
+openapi: "3.1.0"
+info:
+  title: AVA Adaptive Video Analytics API
+  version: "1.0.0"
+  description: |
+    Control and observation plane for adaptive video analytics.
+    Contract family: ava.api/v1.
+    This document defines common types only; endpoint paths are added in F-1-S2.
+servers:
+  - url: /api/v1
+paths: {}
+components:
+  schemas:
+    # ── Versioning ──────────────────────────────────────────────────────
+    SchemaVersion:
+      type: string
+      description: Contract schema version embedded in every resource.
+      examples: ["1.0"]
+
+    # ── Opaque identifiers (ULID-style, prefixed) ───────────────────────
+    EventId:
+      type: string
+      description: Opaque event identifier.
+      pattern: "^evt_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["evt_71HFE865V215DE1CTEWH0AVNH9"]
+
+    CameraId:
+      type: string
+      description: Opaque camera identifier.
+      pattern: "^cam_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["cam_71HFE865V215DE1CTEWH0AVNH9"]
+
+    SiteId:
+      type: string
+      description: Opaque site identifier.
+      pattern: "^site_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["site_71HFE865V215DE1CTEWH0AVNH9"]
+
+    SessionId:
+      type: string
+      description: Opaque processing-session identifier.
+      pattern: "^ses_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["ses_71HFE865V215DE1CTEWH0AVNH9"]
+
+    EvidenceId:
+      type: string
+      description: Opaque evidence-asset identifier.
+      pattern: "^evd_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["evd_71HFE865V215DE1CTEWH0AVNH9"]
+
+    TenantId:
+      type: string
+      description: Opaque tenant identifier (from identity claim).
+      pattern: "^ten_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["ten_71HFE865V215DE1CTEWH0AVNH9"]
+
+    JobId:
+      type: string
+      description: Opaque asynchronous-job identifier.
+      pattern: "^job_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["job_71HFE865V215DE1CTEWH0AVNH9"]
+
+    MessageId:
+      type: string
+      description: Opaque realtime-message identifier.
+      pattern: "^msg_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["msg_71HFE865V215DE1CTEWH0AVNH9"]
+
+    ProfileId:
+      type: string
+      description: Opaque profile identifier.
+      pattern: "^prof_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["prof_71HFE865V215DE1CTEWH0AVNH9"]
+
+    IncidentId:
+      type: string
+      description: Opaque incident identifier.
+      pattern: "^inc_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["inc_71HFE865V215DE1CTEWH0AVNH9"]
+
+    MediaAssetId:
+      type: string
+      description: Opaque media-asset identifier.
+      pattern: "^med_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["med_71HFE865V215DE1CTEWH0AVNH9"]
+
+    SearchId:
+      type: string
+      description: Opaque search-job identifier.
+      pattern: "^srch_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["srch_71HFE865V215DE1CTEWH0AVNH9"]
+
+    DeliverySubscriptionId:
+      type: string
+      description: Opaque delivery-subscription identifier.
+      pattern: "^dlv_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["dlv_71HFE865V215DE1CTEWH0AVNH9"]
+
+    WorkerId:
+      type: string
+      description: Opaque worker identifier.
+      pattern: "^wrk_[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["wrk_71HFE865V215DE1CTEWH0AVNH9"]
+
+    # ── Time ────────────────────────────────────────────────────────────
+    Instant:
+      type: string
+      description: UTC RFC 3339 instant with fractional seconds.
+      format: date-time
+      examples: ["2026-10-21T09:15:31.233Z"]
+
+    SourceTime:
+      type: object
+      description: |
+        Source-clock time for an event. Records clock origin, uncertainty,
+        and whether the UTC value is synthetic.
+      required: [offset_seconds]
+      properties:
+        offset_seconds:
+          type: number
+          description: Offset from source start in seconds.
+          minimum: 0
+          examples: [184.233]
+        captured_at:
+          $ref: "#/components/schemas/Instant"
+          nullable: true
+          description: Capture-time epoch UTC, when known.
+        clock_kind:
+          type: string
+          enum: [camera_utc, file_pts_only, replay_synthetic, live_epoch]
+          description: How the UTC value was derived.
+          examples: [camera_utc]
+        uncertainty_ms:
+          type: integer
+          description: Clock uncertainty in milliseconds.
+          minimum: 0
+          examples: [120]
+        synthetic:
+          type: boolean
+          description: True when the UTC value is synthetically derived.
+          examples: [false]
+
+    # ── Geometry (normalized to source image) ───────────────────────────
+    NormalizedPoint:
+      type: array
+      description: A point in normalized source-image coordinates.
+      items:
+        type: number
+        minimum: 0
+        maximum: 1
+      minItems: 2
+      maxItems: 2
+      examples: [[0.41, 0.22]]
+
+    NormalizedBox:
+      type: array
+      description: Axis-aligned box [x1, y1, x2, y2] in (0,0)-(1,1) space.
+      items:
+        type: number
+        minimum: 0
+        maximum: 1
+      minItems: 4
+      maxItems: 4
+      examples: [[0.41, 0.22, 0.55, 0.94]]
+
+    Geometry:
+      type: object
+      description: Normalized geometry in source-image coordinates.
+      required: [kind, coordinates]
+      properties:
+        kind:
+          type: string
+          enum: [box, polygon]
+          examples: [box]
+        coordinates:
+          oneOf:
+            - $ref: "#/components/schemas/NormalizedBox"
+            - type: array
+              items:
+                $ref: "#/components/schemas/NormalizedPoint"
+              minItems: 3
+
+    # ── Confidence ──────────────────────────────────────────────────────
+    Confidence:
+      type: object
+      description: |
+        A confidence score with its kind. Different kinds must not be
+        compared as calibrated probabilities.
+      required: [value, kind]
+      properties:
+        value:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          examples: [0.91]
+        kind:
+          type: string
+          enum: [detector, rule, verifier, search_similarity]
+          examples: [detector]
+
+    # ── Cursor pagination ───────────────────────────────────────────────
+    PageQuery:
+      type: object
+      description: Cursor-based pagination query parameters.
+      properties:
+        page[cursor]:
+          type: string
+          nullable: true
+          description: Opaque cursor from a previous response; null for first page.
+        page[size]:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+          description: Maximum items per page.
+
+    PageResponse:
+      type: object
+      description: Cursor-based pagination response envelope.
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {}
+          description: Page of resource objects.
+        next_cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page; null when exhausted.
+
+    # ── Job state machine ───────────────────────────────────────────────
+    JobState:
+      type: string
+      description: Asynchronous job lifecycle state.
+      enum: [queued, running, succeeded, failed, cancelling, cancelled, expired]
+      examples: [running]
+
+    JobFailure:
+      type: object
+      description: Structured failure details for a job.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable failure code.
+          examples: [source_unreachable]
+        message:
+          type: string
+          description: Human-readable failure summary (no secrets/paths).
+          examples: ["RTSP source did not respond within 10s"]
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured context.
+
+    Job:
+      type: object
+      description: Asynchronous job resource.
+      required: [id, state, created_at, updated_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/JobId"
+        state:
+          $ref: "#/components/schemas/JobState"
+        created_at:
+          $ref: "#/components/schemas/Instant"
+        updated_at:
+          $ref: "#/components/schemas/Instant"
+        progress:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          nullable: true
+          description: Fractional completion; null when not applicable.
+        failure:
+          $ref: "#/components/schemas/JobFailure"
+          nullable: true
+        retry_of:
+          type: string
+          nullable: true
+          description: Job ID this job retries; null for original.
+
+    # ── RFC 9457 problem details ────────────────────────────────────────
+    ProblemDetail:
+      type: object
+      description: |
+        RFC 9457 problem details. No credential, filesystem path, RTSP URL
+        or vendor response body is exposed.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: IRI reference to problem-type documentation.
+          examples: ["https://ava.example.com/problems/validation_error"]
+        title:
+          type: string
+          description: Short human-readable summary.
+          examples: ["Validation error"]
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: HTTP status code.
+          examples: [422]
+        code:
+          type: string
+          description: Machine-readable AVA error code.
+          examples: [validation_error]
+        detail:
+          type: string
+          description: Human-readable explanation (no secrets/paths).
+        request_id:
+          type: string
+          description: Correlation ID for the request.
+          examples: ["req_71HFE865V215DE1CTEWH0AVNH9"]
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldError"
+          description: Field-level validation errors, when applicable.
+
+    FieldError:
+      type: object
+      description: A single field-level validation error.
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Dotted path to the offending field.
+          examples: ["source_time.offset_seconds"]
+        message:
+          type: string
+          description: What is wrong with the field value.
+          examples: ["must be >= 0"]
+
+    # ── Resource envelope (common to all resources) ─────────────────────
+    ResourceEnvelope:
+      type: object
+      description: Fields present on every AVA resource.
+      required: [schema_version, id, created_at]
+      properties:
+        schema_version:
+          $ref: "#/components/schemas/SchemaVersion"
+        id:
+          type: string
+          description: Opaque resource identifier (type-specific prefix).
+        created_at:
+          $ref: "#/components/schemas/Instant"
+        updated_at:
+          $ref: "#/components/schemas/Instant"
+          nullable: true
+        revision:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Monotonic revision for optimistic concurrency (If-Match).
+
+    # ── External binding ────────────────────────────────────────────────
+    Binding:
+      type: object
+      description: |
+        External system reference. External IDs are not AVA IDs and never
+        determine authorization or tenancy.
+      required: [system, kind, external_id]
+      properties:
+        system:
+          type: string
+          description: External system name.
+          examples: [example-consumer]
+        kind:
+          type: string
+          description: Kind of external object.
+          examples: [camera]
+        external_id:
+          type: string
+          description: The ID in the external system.
