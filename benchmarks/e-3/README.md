@@ -14,6 +14,11 @@ Both pass the short diagnostic checks; batch 8 serves this load with less VRAM.
 The report separates process CPU from host load and records partial batches,
 queue accounting and the limits on capacity and production acceptance.
 
+These diagnostics used a separate experimental pipeline. The landed Python
+batching foundation supplies contracts and a CPU-tested scheduler; live executor
+integration remains pending. The batched YAML examples under `configs/` are
+pending and cannot yet be run through the live CLI.
+
 ## Device visibility
 
 On this host/image, `--gpus device=0` makes native NVDEC return error 100 even
