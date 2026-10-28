@@ -18,6 +18,7 @@ services:
     command: ["run", "--config", "/configs/run.yaml"]
     environment:
       - CUDA_VISIBLE_DEVICES=${AVA_GPU:-0}
+      - AVA_PG_DSN=${AVA_PG_DSN:-}
     deploy:
       resources:
         reservations:

@@ -83,3 +83,11 @@ ultralytics-platform==0.1.90
 ultralytics-thop==2.2.3
 urllib3==2.8.0
 wcwidth==0.9.3
+
+# PostgreSQL persistence and migrations
+psycopg==3.3.6
+psycopg-binary==3.3.6
+psycopg-pool==3.3.3
+alembic==1.20.1
+SQLAlchemy==2.1.6
+Mako==1.4.3

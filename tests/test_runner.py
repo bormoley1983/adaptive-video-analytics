@@ -71,6 +71,7 @@ def _patch_ingest(monkeypatch, n=3, detector=None):
 
 
 def _simple_config(tmp_path: Path) -> RunConfig:
+    from ava.config import PersistenceConfig
     return RunConfig(
         source=tmp_path / "in.mp4",
         detector=DetectorConfig(kind="conventional", model=tmp_path / "m.pt"),
@@ -78,6 +79,7 @@ def _simple_config(tmp_path: Path) -> RunConfig:
         gpu=None,  # CPU path: no CUDA sync
         jsonl=True,
         annotate=False,
+        persistence=PersistenceConfig(backend="jsonl"),
     )
 
 
@@ -161,7 +163,7 @@ def _crossing_rule(**kw):
 
 
 def _camera_config(tmp_path: Path, snapshot: bool = False, n_cams=1):
-    from ava.config import EvidenceOptions
+    from ava.config import EvidenceOptions, PersistenceConfig
 
     rule = _crossing_rule(
         evidence=EvidenceOptions(snapshot=snapshot),
@@ -180,6 +182,7 @@ def _camera_config(tmp_path: Path, snapshot: bool = False, n_cams=1):
         annotate=False,
         cameras=cams,
         profiles=[profile],
+        persistence=PersistenceConfig(backend="jsonl"),
     )
 
 
@@ -200,6 +203,24 @@ def test_camera_run_emits_events_and_per_camera_jsonl(tmp_path, monkeypatch):
     # Per-camera detection JSONL.
     cam_jsonl = tmp_path / "out" / "cam-01.jsonl"
     assert cam_jsonl.exists()
+
+
+def test_camera_run_identity_can_be_reused_for_replay(tmp_path, monkeypatch):
+    _patch_ingest(monkeypatch, n=3, detector=_FakeDetector())
+    config = _camera_config(tmp_path)
+    config.run_id = "replay-123"
+    runner.run(config)
+    runner.run(config)
+    first = [json.loads(line)["event_id"] for line in
+             (config.output_dir / "events.jsonl").read_text().splitlines()]
+    second = [json.loads(line)["event_id"] for line in
+              (config.output_dir / "events-1.jsonl").read_text().splitlines()]
+    assert first and first == second
+    config.run_id = None
+    runner.run(config)
+    third = [json.loads(line)["event_id"] for line in
+             (config.output_dir / "events-2.jsonl").read_text().splitlines()]
+    assert third and set(first).isdisjoint(third)
 
 
 def test_camera_run_resets_tracker_once_per_camera(tmp_path, monkeypatch):

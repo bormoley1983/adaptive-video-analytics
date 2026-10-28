@@ -153,6 +153,9 @@ def _make_live_config(n_cameras: int = 1, **kwargs) -> LiveRunConfig:
         )
         for i in range(n_cameras)
     ]
+    # Unit tests use the JSONL backend (no database required).
+    from ava.config import PersistenceConfig
+    kwargs.setdefault("persistence", PersistenceConfig(backend="jsonl"))
     return LiveRunConfig(
         cameras=cameras,
         profiles=[RuleProfile(id="test-profile", rules=[])],
@@ -958,9 +961,10 @@ class TestReconnectTelemetry:
         assert len(reconnect_logs) == 2
         by_cam = {l["camera_id"]: l for l in reconnect_logs}
         assert by_cam["cam-01"]["attempt"] == 1
-        assert by_cam["cam-01"]["session_id"] == "s2"
+        # Session ID has a run-scoped prefix (unique per run) + reconnect suffix.
+        assert by_cam["cam-01"]["session_id"].endswith("-s2")
         assert by_cam["cam-02"]["attempt"] == 1
-        assert by_cam["cam-02"]["session_id"] == "s2"
+        assert by_cam["cam-02"]["session_id"].endswith("-s2")
 
         # The Prometheus counter series exists with a value of 1 per camera.
         for cam in ("cam-01", "cam-02"):
@@ -1119,3 +1123,51 @@ class TestBoundedDuration:
         summary = run_live(live_config, det_config, tmp_path / "out", gpu=None)
 
         assert summary.cameras[0].frames_decoded == 5
+
+
+def test_live_run_stops_when_database_health_check_fails(tmp_path, monkeypatch):
+    import ava.live_runner as lr
+    from ava.persistence import compose
+
+    class FailedSink:
+        def check_connection(self):
+            raise RuntimeError("database unavailable")
+
+        def write(self, record):
+            return True
+
+        def close(self):
+            self.closed = True
+
+    sink = FailedSink()
+    monkeypatch.setattr(compose, "build_event_sink", lambda *args, **kwargs: sink)
+    monkeypatch.setattr(lr, "_build_detector", lambda *args, **kwargs: FakeDetector())
+    monkeypatch.setattr(lr, "iter_live_frames", FakeSource(n_frames=5))
+
+    with pytest.raises(RuntimeError, match="Event persistence failed"):
+        run_live(_make_live_config(), _make_detector_config(tmp_path), tmp_path / "out", gpu=None)
+
+    assert sink.closed
+
+
+def test_live_summary_omits_event_path_for_database_sink(tmp_path, monkeypatch):
+    import ava.live_runner as lr
+    from ava.persistence import compose
+
+    class DatabaseSink:
+        def check_connection(self):
+            pass
+
+        def write(self, record):
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(compose, "build_event_sink", lambda *args, **kwargs: DatabaseSink())
+    monkeypatch.setattr(lr, "_build_detector", lambda *args, **kwargs: FakeDetector())
+    monkeypatch.setattr(lr, "iter_live_frames", FakeSource(n_frames=5))
+
+    summary = run_live(_make_live_config(), _make_detector_config(tmp_path), tmp_path / "out", gpu=None)
+
+    assert summary.output_paths == [str(tmp_path / "out" / "metrics.json")]

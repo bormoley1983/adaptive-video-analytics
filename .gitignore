@@ -34,3 +34,4 @@ benchmarks/**/*.jsonl
 # Local scratch and benchmark footage; keep media out of Git.
 /_s*.mp4
 /benchmarks/**/*.mp4
+src/ava.egg-info/

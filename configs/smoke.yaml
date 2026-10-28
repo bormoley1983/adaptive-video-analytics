@@ -1,6 +1,8 @@
 source: /videos/smoke.mp4
 gpu: "0"
 output_dir: /results/smoke
+persistence:
+  backend: jsonl
 jsonl: true
 annotate: true
 detector:

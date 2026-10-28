@@ -20,6 +20,25 @@ name: ava-ops
 x-ava-target: &ava-target "host-gateway"
 
 services:
+  postgres:
+    image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    restart: on-failure
+    environment:
+      POSTGRES_DB: ava
+      POSTGRES_USER: ava
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in ops/.env}
+    volumes:
+      - ops-postgres:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ava -d ava"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 512m
+
   prometheus:
     image: prom/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     restart: on-failure
@@ -123,6 +142,7 @@ services:
     mem_limit: 1g
 
 volumes:
+  ops-postgres:
   ops-prometheus:
   ops-loki:
   ops-grafana:

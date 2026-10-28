@@ -3,6 +3,8 @@
 source: /videos/input.mp4
 gpu: "0"
 output_dir: /results/conventional
+persistence:
+  backend: jsonl
 jsonl: true
 annotate: true
 detector:

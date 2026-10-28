@@ -15,9 +15,10 @@ from datetime import UTC, datetime
 
 from .config import RunConfig
 from .detector import ConventionalDetector, Detector, PromptedDetector
-from .events import EventRecord, EventWriter, EvidenceLocator, EvidenceStore
+from .events import EventRecord, EvidenceLocator, EvidenceStore
 from .ingest import iter_frames, probe
 from .output import AnnotatedVideoWriter, JsonlWriter
+from .persistence.ports import EventSink
 from .rules import RuleEngine, RuleEvent
 from .timing import PhaseTimer, peak_gpu_memory_bytes, reset_peak_gpu_memory
 
@@ -57,6 +58,14 @@ class RunSummary:
 def _utc_now_iso() -> str:
     """Wall-clock UTC in ISO-8601 (emitted_utc for live/replay runs)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+import uuid
+
+
+def _run_session_id() -> str:
+    """Unique per-run session prefix; prevents cross-run event ID collisions."""
+    return uuid.uuid4().hex[:12]
 
 
 def _evidence_for(rule, event: RuleEvent, store: EvidenceStore,
@@ -266,21 +275,46 @@ def _run_cameras(config: RunConfig) -> RunSummary:
 
     # Run isolation: a fresh run must not append to a previous run's events.
     # If an events.jsonl already exists, start a new numbered file so reruns
-    # are isolated (ADR-5).
+    # are isolated (ADR-5). For PostgreSQL the path is unused but computed
+    # for consistency.
     events_path = config.output_dir / "events.jsonl"
     if events_path.exists():
         counter = 1
         while (config.output_dir / f"events-{counter}.jsonl").exists():
             counter += 1
         events_path = config.output_dir / f"events-{counter}.jsonl"
-    event_writer = EventWriter(events_path)
 
+    from .persistence.compose import build_event_sink
+    event_writer: EventSink = build_event_sink(
+        config.persistence, jsonl_path=events_path
+    )
+
+    try:
+      return _run_cameras_body(
+          config, detector, summary, event_writer,
+          profiles_by_id, model_ref, store,
+      )
+    finally:
+      event_writer.close()
+
+
+def _run_cameras_body(
+    config: RunConfig,
+    detector: Detector,
+    summary: RunSummary,
+    event_writer: EventSink,
+    profiles_by_id: dict,
+    model_ref: str,
+    store: EvidenceStore,
+) -> RunSummary:
+    """Inner body of _run_cameras; the sink is closed by the caller's finally."""
     on_gpu = detector.device == "cuda"
     timer = PhaseTimer(sync=on_gpu)
     if on_gpu:
         reset_peak_gpu_memory()
 
     start = time.perf_counter()
+    run_id = config.run_id or _run_session_id()
     for cam in config.cameras:
         # One authoritative tracker/session per camera: clear any tracker state
         # left by the previous camera's clip so track IDs and Kalman state do
@@ -295,7 +329,7 @@ def _run_cameras(config: RunConfig) -> RunSummary:
         rules = []
         for ref in cam.profiles:
             rules.extend(profiles_by_id[ref].rules)
-        engine = RuleEngine(rules, camera_id=cam.id, session_id="s1")
+        engine = RuleEngine(rules, camera_id=cam.id, session_id=f"{run_id}-s1")
 
         jsonl_writer = JsonlWriter(config.output_dir / f"{cam.id}.jsonl") \
             if config.jsonl else None
@@ -339,10 +373,12 @@ def _run_cameras(config: RunConfig) -> RunSummary:
             emitted_utc = _utc_now_iso()
             for event in engine.process_frame(result, emitted_utc):
                 rule = next(r for r in rules if r.id == event.rule_id)
+                if event_writer.has_event(event.event_id):
+                    continue
+                    continue
+
                 evidence = _evidence_for(rule, event, store, frame_buffer, fps)
                 if evidence == "DEFERRED_CLIP":
-                    # Defer both the clip and the event record until the
-                    # centered window is available.
                     pending_clips.append((event, rule))
                     pending_records.append((event, rule))
                 else:
@@ -352,8 +388,8 @@ def _run_cameras(config: RunConfig) -> RunSummary:
                         model_ref=model_ref,
                         evidence=evidence,
                     )
-                    event_writer.write(record)
-                summary.events += 1
+                    if event_writer.write(record):
+                        summary.events += 1
 
             # Flush any deferred clips whose post-event window is now ready.
             if pending_clips:
@@ -369,7 +405,8 @@ def _run_cameras(config: RunConfig) -> RunSummary:
                         model_ref=model_ref,
                         evidence=locator,
                     )
-                    event_writer.write(record)
+                    if event_writer.write(record):
+                        summary.events += 1
 
             timer.begin("output")
             # The camera path always writes per-camera JSONL; only the
@@ -393,7 +430,8 @@ def _run_cameras(config: RunConfig) -> RunSummary:
                     model_ref=model_ref,
                     evidence=locator,
                 )
-                event_writer.write(record)
+                if event_writer.write(record):
+                    summary.events += 1
 
         jsonl_writer.close()
         summary.output_paths.append(str(jsonl_writer.path))
@@ -401,8 +439,10 @@ def _run_cameras(config: RunConfig) -> RunSummary:
             video_writer.close()
             summary.output_paths.append(str(video_writer.path))
 
-    event_writer.close()
-    summary.output_paths.append(str(event_writer.path))
+    # Only report the output path for file-based sinks; PostgreSQL has no
+    # local path to report.
+    if hasattr(event_writer, "path"):
+        summary.output_paths.append(str(event_writer.path))
     summary.wall_seconds = time.perf_counter() - start
 
     infer_total = timer.total("inference")

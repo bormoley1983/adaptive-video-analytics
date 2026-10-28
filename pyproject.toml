@@ -29,6 +29,10 @@ dependencies = [
     "PyYAML==6.0.3",
     # Prometheus scrape surface for live runs (B-021); stdlib http.server host.
     "prometheus_client==0.26.0",
+    # PostgreSQL persistence (B-023): driver, pool, and migrations.
+    "psycopg[binary]>=3.1,<4",
+    "psycopg_pool>=3.1,<4",
+    "alembic>=1.13,<2",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +40,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=6.0",
     "ruff>=0.4",
+    "testcontainers[postgres]>=4.0",
 ]
 
 [project.scripts]

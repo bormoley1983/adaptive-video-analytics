@@ -4,6 +4,8 @@
 source: /videos/input.mp4
 gpu: "0"
 output_dir: /results/prompted
+persistence:
+  backend: jsonl
 jsonl: true
 annotate: true
 detector:

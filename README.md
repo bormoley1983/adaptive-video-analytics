@@ -73,6 +73,51 @@ correctness remains subject to the documented validation gates; do not treat a
 locator as verified until its file resolves.
 Override the GPU with `AVA_GPU=<index-or-uuid> docker compose run ...`.
 
+## PostgreSQL persistence
+
+**Breaking change (B-023):** PostgreSQL is the mandatory default backend.
+Event-producing camera and live runs require a reachable PostgreSQL server
+unless the config explicitly sets `persistence.backend: jsonl`. Detection-only
+file runs do not connect to an event sink.
+
+To use PostgreSQL, set `AVA_PG_DSN` in the environment (or provide
+`persistence.dsn` in the config) and apply the schema first:
+
+```bash
+AVA_PG_DSN=postgresql://ava:***@localhost:5432/ava alembic upgrade head
+```
+
+The inference image includes the migration files; run Alembic with the
+image entrypoint overridden. PostgreSQL must be reachable at startup;
+if persistence fails during a live run, all cameras stop and the run
+fails.
+
+**Container-to-database path:** Start the ops stack first, then attach the
+worker to its Docker network with the PostgreSQL Compose override. The host
+port remains bound to loopback. Use `postgres` as the database hostname inside
+the worker; use `localhost` for migrations run on the host. Copy an event-producing
+config under `configs/` and change its persistence backend to `postgres`:
+
+```bash
+AVA_PG_DSN='postgresql://ava:YOUR_PASSWORD@postgres:5432/ava' \
+  docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  run --rm ava run --config /configs/your-postgres-config.yaml
+```
+
+For file camera runs, set an optional `run_id` in the configuration to reuse
+event identities when retrying the same input. Omit it for a new run; AVA
+generates an identity, visible as the prefix before `-s1` in the first event's
+`session_id`. Reusing an ID for different input can cause distinct events to be
+treated as duplicates. A run with no events does not record the generated ID;
+specify one beforehand if it must be recoverable for a retry.
+
+To opt out (file-only mode), add to the run config:
+
+```yaml
+persistence:
+  backend: jsonl
+```
+
 ## Development checks
 
 ```bash

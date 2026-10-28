@@ -13,9 +13,12 @@ Every rule-triggered incident is recorded as a versioned JSON object with:
 - an evidence locator that resolves to the concrete snapshot or clip for the
   incident.
 
-The writer appends one JSON object per line to ``events.jsonl`` and, when
+The event sink appends one JSON object per line to ``events.jsonl`` and, when
 evidence is requested by a rule, copies the triggering frame (snapshot) or a
-bounded window of frames (clip) into the run's evidence directory.
+bounded window of frames (clip) into the run's evidence directory. The
+concrete writer lives in :mod:`ava.persistence.jsonl_sink`; this module
+re-exports it under the historical name ``EventWriter`` for backward
+compatibility.
 """
 
 from __future__ import annotations
@@ -73,7 +76,7 @@ class EventRecord:
     # Capture-time epoch UTC (ISO-8601) when known; None for file-only runs.
     capture_utc: str | None = None
     # How capture_utc was derived: "live_epoch", "replay_synthetic", or
-    # "file_pts_only" (ADR-4 / K-safety C-02).
+    # "file_pts_only" (ADR-4).
     time_basis: str = "file_pts_only"
     payload: dict = field(default_factory=dict)
 
@@ -109,45 +112,18 @@ class EventRecord:
         return json.dumps(data, sort_keys=True)
 
 
-class EventWriter:
-    """Append-only JSONL writer for versioned event records.
+def __getattr__(name: str):
+    """Lazily resolve ``EventWriter`` to avoid a circular import.
 
-    Idempotency: writing the same ``event_id`` twice appends two lines; the
-    *contract* guarantee is that a retry over the same stream produces the
-    same IDs, so consumers deduplicate on ``event_id``. The writer itself
-    tracks seen IDs and can optionally skip duplicates (``dedupe=True``) for
-    crash-recovery runs where the file may already contain partial output.
+    ``events.py`` is imported by ``persistence/jsonl_sink.py`` (for
+    ``EventRecord``), so a top-level import of ``JsonlEventSink`` here would
+    be circular. The module-level ``__getattr__`` defers the lookup until
+    first attribute access, by which time both modules are fully loaded.
     """
-
-    def __init__(self, path: Path, *, dedupe: bool = False) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._dedupe = dedupe
-        self._seen: set[str] = set()
-        if dedupe and path.exists():
-            # Rebuild the seen set from any existing output (crash recovery).
-            with path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        self._seen.add(json.loads(line)["event_id"])
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-        self._handle = path.open("a", encoding="utf-8")
-
-    def write(self, record: EventRecord) -> bool:
-        """Append one record. Returns False if skipped as a duplicate."""
-        if self._dedupe and record.event_id in self._seen:
-            return False
-        self._seen.add(record.event_id)
-        self._handle.write(record.to_json() + "\n")
-        self._handle.flush()
-        return True
-
-    def close(self) -> None:
-        self._handle.close()
+    if name == "EventWriter":
+        from .persistence.jsonl_sink import JsonlEventSink
+        return JsonlEventSink
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class EvidenceStore:

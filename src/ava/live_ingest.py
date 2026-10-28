@@ -63,6 +63,13 @@ class LiveSourceState:
     _cap: object = field(default=None, repr=False)
 
 
+def make_session_id() -> str:
+    """Unique per-run session prefix; prevents cross-run event ID collisions."""
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
 def _build_opencv_capture(url: str):
     """Create an OpenCV VideoCapture for an RTSP URL with sensible defaults."""
     import cv2  # deferred: heavy import
@@ -121,7 +128,8 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
     On reconnect, ``session_id`` advances (ADR-4: discontinuity starts a new
     session). The caller can detect this by tracking the state object.
     """
-    state = LiveSourceState()
+    base_session = make_session_id()
+    state = LiveSourceState(session_id=f"{base_session}-s1")
     delay = config.reconnect_delay_s
     stop_event = config.stop_event
 
@@ -137,7 +145,7 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
             if state.reconnects >= config.reconnect_max or _stopped():
                 return
             state.reconnects += 1
-            state.session_id = f"s{state.reconnects + 1}"
+            state.session_id = f"{base_session}-s{state.reconnects + 1}"
             if config.on_reconnect is not None:
                 config.on_reconnect(state.reconnects, state.session_id)
             # Interruptible backoff so a stop signal lands promptly.
@@ -176,7 +184,7 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
         if _stopped() or state.reconnects >= config.reconnect_max:
             return
         state.reconnects += 1
-        state.session_id = f"s{state.reconnects + 1}"
+        state.session_id = f"{base_session}-s{state.reconnects + 1}"
         if config.on_reconnect is not None:
             config.on_reconnect(state.reconnects, state.session_id)
         time.sleep(delay)
