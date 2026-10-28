@@ -41,6 +41,8 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.4",
     "testcontainers[postgres]>=4.0",
+    "api-schema-diff>=1.0",
+    "PyYAML>=6.0",
 ]
 
 [project.scripts]
