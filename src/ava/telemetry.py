@@ -185,7 +185,9 @@ INFERENCE_DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0)
 # Bounded label value sets. Camera comes from the configured finite inventory;
 # everything else is a fixed category list. Event/track/request IDs are never
 # labels (unbounded population).
-DROP_REASONS = ("buffer_full", "reconnect", "error")
+DROP_REASONS = ("buffer_full", "reconnect", "error", "stale_session", "candidate_replaced",
+                "cancelled", "processing_error", "item_failed", "batch_failed",
+                "shutdown_timeout", "out_of_order", "stopping")
 ERROR_KINDS = ("decode", "inference", "rules", "sink", "other")
 
 

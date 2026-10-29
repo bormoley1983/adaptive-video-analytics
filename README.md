@@ -22,11 +22,13 @@ measured evidence; databases and the product API/UI remain later work. See
 architecture ADRs and test rules are committed under `docs/architecture/` and
 `docs/tests_rules.md`.
 
-The batching foundation provides correlated detection/tracker interfaces and a
-CPU-tested fair scheduler with bounded candidates, in-flight work and shutdown.
-Live activation and the real single-model executor remain pending. The
-`run-e3-*-conv-batched.yaml` examples are pending configurations and are rejected
-by the current live configuration validator.
+The batched live mode uses one detection model with a bounded fair scheduler
+and independent camera trackers/rules. Python/Ultralytics is implemented;
+selecting the DeepStream adapter reports that it is unavailable. The diagnostic
+YAML examples explicitly use JSONL; PostgreSQL remains the production default.
+GPU batching uses explicit IEEE FP32 arithmetic. Fresh numerical parity and
+four-camera smoke pass; the 50-camera matrix misses FPS/drop targets. See
+[the runtime checkpoint](benchmarks/e-3/python-batched-runtime.md).
 
 The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
 serves the local-AI stack and one is shared by AVA and other projects. AVA must

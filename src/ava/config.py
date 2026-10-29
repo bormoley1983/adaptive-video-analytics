@@ -377,15 +377,38 @@ class PersistenceConfig(BaseModel):
         return self  # DSN enforced at sink construction, not config load
 
 
+class BatchConfig(BaseModel):
+    """Bounded scheduling, startup and shutdown controls."""
+
+    model_config = {"extra": "forbid", "allow_inf_nan": False}
+    max_batch_size: int = Field(16, gt=0, strict=True)
+    max_wait_ms: float = Field(20, gt=0)
+    readiness_timeout_s: float = Field(60, gt=0)
+    warmup_s: float = Field(30, ge=0)
+    shutdown_timeout_s: float = Field(5, gt=0)
+
+
 class LiveRunConfig(BaseModel):
     """Configuration for a live multi-camera RTSP run."""
+
+    model_config = {"allow_inf_nan": False}
 
     # Decode backend: "opencv" (simplest) or "gstreamer" (explicit buffer caps,
     # NVDEC path later).
     backend: Literal["opencv", "gstreamer"] = "opencv"
     # Detector sharing mode: "shared" (one model, serialized inference) or
     # "per_camera" (one model per camera, parallel inference).
-    detector_mode: Literal["shared", "per_camera"] = "shared"
+    detector_mode: Literal["shared", "per_camera", "batched"] = "shared"
+    inference_backend: Literal["ultralytics", "deepstream"] = "ultralytics"
+    batch: BatchConfig = Field(default_factory=BatchConfig)
+    parallel_open: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _batch_controls(cls, data):
+        if isinstance(data, dict) and "batch" in data and data.get("detector_mode") != "batched":
+            raise ValueError("batch controls require batched detector mode")
+        return data
     # Per-camera processing queue. On overflow the oldest queued frame is
     # dropped so live analysis does not accumulate unbounded latency.
     buffer_size: int = Field(30, ge=1)

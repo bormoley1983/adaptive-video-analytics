@@ -14,10 +14,12 @@ Both pass the short diagnostic checks; batch 8 serves this load with less VRAM.
 The report separates process CPU from host load and records partial batches,
 queue accounting and the limits on capacity and production acceptance.
 
-These diagnostics used a separate experimental pipeline. The landed Python
-batching foundation supplies contracts and a CPU-tested scheduler; live executor
-integration remains pending. The batched YAML examples under `configs/` are
-pending and cannot yet be run through the live CLI.
+These diagnostics used a separate experimental pipeline. The Python live
+executor is now implemented with independent camera trackers and explicit
+JSONL diagnostic examples. Its four-camera smoke and numerical parity pass;
+the five-minute 50-camera matrix misses FPS/drop targets. See the
+[Python runtime report](python-batched-runtime.md) for the tested profile and
+acceptance limits.
 
 ## Device visibility
 
