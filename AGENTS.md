@@ -82,9 +82,14 @@ separate step against the saved log.
 
 ## Parallel work
 
-- One sibling worktree and branch per task: `../ava-worktrees/<task>` and
-  `agent/<task>`, created from an explicit committed base; never share a
-  worktree. Other worktrees' uncommitted changes are not inherited.
+- One persistent worktree and branch per task: `$HOME/ava-worktrees/<task>`
+  and `agent/<task>`, created from an explicit committed base; never share a
+  worktree. Never put worktrees in `/tmp` or other temporary storage. Other
+  worktrees' uncommitted changes are not inherited.
+- Keep plans, recovery patches and validation evidence on persistent storage.
+  Use `/tmp` only for disposable scratch files whose loss cannot prevent task
+  recovery. Before a handoff, preserve an up-to-date recovery patch including
+  new files and reference its persistent path in the task plan.
 - Assign each worker one outcome and owned files; coordinate before scopes
   overlap. Workers prepare focused, reviewable changes and validation evidence,
   then commit only after the mandatory human approval of that exact commit.

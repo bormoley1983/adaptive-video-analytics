@@ -321,6 +321,9 @@ def run_live(
     Blocks until all cameras are stopped (via :func:`stop_live_run`) or they
     exhaust their reconnect budgets. Returns a summary with per-camera stats.
     """
+    from .batch_backend import validate_backend
+
+    validate_backend(live_config, detector_config)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Event writer (shared across cameras).
@@ -337,6 +340,9 @@ def run_live(
     )
 
     try:
+      if live_config.detector_mode == "batched":
+          from .batch_live import run_batched_live
+          return run_batched_live(live_config, detector_config, output_dir, gpu, event_writer)
       return _run_live_body(
           live_config, detector_config, output_dir, gpu, event_writer
       )

@@ -11,19 +11,21 @@
 
 detector:
   kind: conventional
-  model: models/yolo26n.pt
+  model: /models/yolo26n.pt
   confidence: 0.35
   iou: 0.5
 gpu: "0"
-output_dir: results/e3-cap-50-conv-batched-fixed
+output_dir: /results/run
 
 live:
   backend: opencv
-  # Concurrent OpenCV opens (E-3-22): removes the FFmpeg capture lock so all 50
-  # sources open in parallel instead of serializing (~5.5 s vs ~19 s). Opt-in and
-  # validated against the pinned runtime; ignored by non-OpenCV backends.
+  # Concurrent Python connection requests. Native locking is a separate,
+  # explicitly declared process environment option in diagnostic runs.
   parallel_open: true
   detector_mode: batched
+  inference_backend: ultralytics
+  persistence:
+    backend: jsonl
   buffer_size: 40
   reconnect_max: 3
   reconnect_delay_s: 1.0

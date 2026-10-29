@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         gpu = args.gpu if args.gpu is not None else raw.get("gpu", "0")
         output_dir = Path(raw.get("output_dir", "results"))
 
+        from .batch_backend import validate_backend
+        validate_backend(live_config, detector_config)
         _verify_persistence(live_config)
         summary = run_live(live_config, detector_config, output_dir, gpu=gpu)
         print(json.dumps(summary.to_dict(), indent=2))
