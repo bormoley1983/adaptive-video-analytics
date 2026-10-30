@@ -150,8 +150,13 @@ of changed behavior remain more important than maximizing the percentage. See
 
 Construct the API app with an `IdentityPolicy` to enable authenticated access
 to version and capabilities. Protected routes reject requests if no policy is
-configured. Liveness and readiness remain open. The canonical OpenAPI contract is `src/ava/api/openapi.yaml`; it is included
-in the package and served by the application.
+configured. Liveness and readiness remain open. Every response carries an
+`X-Request-Id` header: a client-supplied canonical RFC 4122 UUID (lowercase)
+is preserved, otherwise AVA generates one; a malformed value yields a 400
+problem response with a newly generated ID and is never reflected or logged.
+Error responses include the request ID in both the header and the problem
+body. The canonical OpenAPI contract is `src/ava/api/openapi.yaml`; it is
+included in the package and served by the application.
 The separate local Keycloak and identity database stack is documented in
 [ops/README.md](ops/README.md#local-identity-provider).
 Readiness contributors may set `required = False` for optional dependencies;
