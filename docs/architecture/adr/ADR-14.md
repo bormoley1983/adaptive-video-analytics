@@ -33,7 +33,10 @@ and camera credentials never appear in responses.
 
 Authentication is supplied by the deployment identity provider. Human and
 machine identities use the same authorization model with tenant/site-scoped
-roles. AVA does not implement a second identity directory. Storage, broker,
+roles. AVA does not implement a second identity directory. Keycloak is the
+planned initial local provider in `ops/`; its F-1-S3 integration and operational
+validation remain pending. Protected requests fail when a required signing-key
+refresh cannot succeed. The identity port remains provider-independent. Storage, broker,
 VMS, detector and third-party analytics details remain behind ports/adapters.
 Optional consumer and provider adapters translate at the edge and retain
 external IDs in namespaced bindings; their DTOs do not leak into AVA resources.

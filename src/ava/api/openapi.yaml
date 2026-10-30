@@ -5,11 +5,132 @@ info:
   description: |
     Control and observation plane for adaptive video analytics.
     Contract family: ava.api/v1.
-    This document defines common types only; endpoint paths are added in F-1-S2.
 servers:
   - url: /api/v1
-paths: {}
+paths:
+  /health/live:
+    get:
+      operationId: getHealthLive
+      summary: Process liveness
+      description: No dependency probes; safe for load-balancer health checks.
+      security: []
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    examples: ["alive"]
+  /health/ready:
+    get:
+      operationId: getHealthReady
+      summary: API readiness
+      description: Reports dependency states without secrets.
+      security: []
+      responses:
+        "200":
+          description: Readiness report.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ready]
+                properties:
+                  ready:
+                    type: boolean
+                  dependencies:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, state]
+                      properties:
+                        name:
+                          type: string
+                        state:
+                          type: string
+                          enum: [ready, degraded, unavailable, stale, unknown]
+                        detail:
+                          type: ["string", "null"]
+                        checked_at:
+                          $ref: "#/components/schemas/Instant"
+  /version:
+    get:
+      operationId: getVersion
+      summary: Build and contract version manifest
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Version information.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [package_version, contract_version, python_version]
+                properties:
+                  package_version:
+                    type: string
+                  contract_version:
+                    type: string
+                  python_version:
+                    type: string
+        "401":
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Supported features and bounded limits
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Capability list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [capabilities]
+                properties:
+                  capabilities:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, available]
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        available:
+                          type: boolean
+                        limits:
+                          type: object
+                        detail:
+                          type: ["string", "null"]
+        "401":
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Deployment-issued RS256 bearer token. Required claims: sub, tenant,
+        roles[]. Optional: allowed_sites[] (absent = all sites in tenant).
   schemas:
     # ── Versioning ──────────────────────────────────────────────────────
     SchemaVersion:
@@ -122,8 +243,9 @@ components:
           minimum: 0
           examples: [184.233]
         captured_at:
-          $ref: "#/components/schemas/Instant"
-          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/Instant"
+            - type: "null"
           description: Capture-time epoch UTC, when known.
         clock_kind:
           type: string
@@ -204,8 +326,7 @@ components:
       description: Cursor-based pagination query parameters.
       properties:
         page[cursor]:
-          type: string
-          nullable: true
+          type: ["string", "null"]
           description: Opaque cursor from a previous response; null for first page.
         page[size]:
           type: integer
@@ -224,8 +345,7 @@ components:
           items: {}
           description: Page of resource objects.
         next_cursor:
-          type: string
-          nullable: true
+          type: ["string", "null"]
           description: Opaque cursor for the next page; null when exhausted.
 
     # ── Job state machine ───────────────────────────────────────────────
@@ -267,17 +387,16 @@ components:
         updated_at:
           $ref: "#/components/schemas/Instant"
         progress:
-          type: number
+          type: ["number", "null"]
           minimum: 0.0
           maximum: 1.0
-          nullable: true
           description: Fractional completion; null when not applicable.
         failure:
-          $ref: "#/components/schemas/JobFailure"
-          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/JobFailure"
+            - type: "null"
         retry_of:
-          type: string
-          nullable: true
+          type: ["string", "null"]
           description: Job ID this job retries; null for original.
 
     # ── RFC 9457 problem details ────────────────────────────────────────
@@ -348,12 +467,12 @@ components:
         created_at:
           $ref: "#/components/schemas/Instant"
         updated_at:
-          $ref: "#/components/schemas/Instant"
-          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/Instant"
+            - type: "null"
         revision:
-          type: integer
+          type: ["integer", "null"]
           minimum: 0
-          nullable: true
           description: Monotonic revision for optimistic concurrency (If-Match).
 
     # ── External binding ────────────────────────────────────────────────

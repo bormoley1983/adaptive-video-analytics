@@ -145,3 +145,14 @@ suite exits as not collected rather than being treated as a pass. The coverage
 gate requires at least 90% combined line and branch coverage; meaningful tests
 of changed behavior remain more important than maximizing the percentage. See
 `docs/tests_rules.md`.
+
+## API authentication and readiness
+
+Construct the API app with an `IdentityPolicy` to enable authenticated access
+to version and capabilities. Protected routes reject requests if no policy is
+configured. Liveness and readiness remain open. The canonical OpenAPI contract is `src/ava/api/openapi.yaml`; it is included
+in the package and served by the application.
+The separate local Keycloak and identity database stack is documented in
+[ops/README.md](ops/README.md#local-identity-provider).
+Readiness contributors may set `required = False` for optional dependencies;
+contributors default to required when the attribute is absent.

@@ -6,7 +6,7 @@ LAYOUT_LEFT_RIGHT()
 
 Person(operator, "Operator / investigator", "Monitors processing, handles incidents and runs authorized investigations")
 System_Ext(vms, "VMS / camera estate", "Recording/playback authority and RTSP/H.264 analytic streams")
-System_Ext(idp, "Deployment identity provider", "Human and service identity tokens; tenant/site claims")
+System_Ext(idp, "Deployment identity provider", "Keycloak initial local provider; human/service tokens and tenant/site claims")
 System_Ext(consumer, "Optional external consumer", "Downstream alarm/workflow or future stream consumer")
 System_Ext(provider, "Optional analytics provider", "Replaceable backend behind an AVA port")
 System_Ext(local_ai, "Local AI through LiteLLM", "Existing Qwen service; bounded candidate enrichment, independently operated")

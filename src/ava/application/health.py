@@ -42,6 +42,9 @@ class HealthReport:
 class HealthContributor(Protocol):
     """Outbound port: report one dependency's state and freshness."""
 
+    required: bool
+    name: str
+
     def check(self) -> HealthReport: ...
 
 
@@ -69,8 +72,22 @@ class ReadinessChecker:
         self._contributors = contributors or []
 
     def check(self) -> ReadinessResult:
-        reports = [c.check() for c in self._contributors]
-        ready = all(r.state in (DependencyState.READY, DependencyState.DEGRADED) for r in reports)
+        reports = []
+        ready = True
+        for contributor in self._contributors:
+            try:
+                report = contributor.check()
+            except Exception as exc:  # noqa: BLE001 — boundary: no contributor error may break readiness
+                report = HealthReport(
+                    name=getattr(contributor, "name", type(contributor).__name__),
+                    state=DependencyState.UNAVAILABLE,
+                    detail=f"check failed: {type(exc).__name__}",
+                )
+            reports.append(report)
+            if getattr(contributor, "required", True) and report.state not in (
+                DependencyState.READY, DependencyState.DEGRADED
+            ):
+                ready = False
         return ReadinessResult(ready=ready, reports=reports)
 
     def add_contributor(self, contributor: HealthContributor) -> None:

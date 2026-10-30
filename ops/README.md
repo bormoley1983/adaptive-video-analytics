@@ -32,6 +32,48 @@ reachable from the LAN.
 The optional worker Compose override joins that network for PostgreSQL access;
 see the root README for its invocation.
 
+## Local identity provider
+
+Keycloak and its dedicated PostgreSQL server form the separate `ava-identity`
+Compose project in `ops/keycloak-compose.yml`. The identity database is separate
+from the `ava-ops` PostgreSQL server used for events. Starting identity starts
+both Keycloak and its database; the replay harness and observability stack have
+independent lifecycles. Keycloak is exposed on `127.0.0.1:18080`; the identity
+PostgreSQL server has no host port.
+
+Create `ops/.env` from the example only if it does not already exist, and set
+`KEYCLOAK_ADMIN_PASSWORD` and `KEYCLOAK_DB_PASSWORD` to local values. Then use:
+
+```bash
+docker compose --env-file ops/.env -f ops/keycloak-compose.yml up -d
+docker compose --env-file ops/.env -f ops/keycloak-compose.yml ps
+docker compose --env-file ops/.env -f ops/keycloak-compose.yml down
+```
+
+`down` preserves the named identity volumes. Do not use `down -v` unless the
+identity data is intentionally being discarded. PostgreSQL stores realm, user
+and configuration state; include it in any backup/restore plan. The imported
+realm is a development fixture with hardcoded tenant, roles and credentials,
+not a deployment authorization configuration. Startup import skips a realm
+that already exists, so editing the import file does not update an existing
+realm. Verify fresh imports using an isolated project and volumes.
+
+Configure AVA with the exact issuer in the realm's OIDC discovery document,
+the associated JWKS endpoint, and audience `ava-api`. The issuer advertised by
+Keycloak must be reachable and match the token issuer from the API's network
+location; container `localhost` refers to that container, not the host. Verify
+host and container routing and the advertised URL for each deployment. The
+Compose service's current healthcheck checks Java availability, not Keycloak
+readiness; confirm the discovery endpoint and token flow separately.
+
+The separate database keeps the local identity stack self-contained. A later
+deployment may use the same PostgreSQL server as AVA events with a dedicated
+Keycloak database and account, after agreeing on isolation, credentials,
+backups, recovery and migration. No migration or shared-server configuration
+is implemented here. The current Keycloak `start-dev` setup is for local use;
+a networked deployment requires an appropriate production configuration and
+TLS.
+
 ## AVA scrape target
 
 The live analytics worker runs on the host and exposes `/metrics` when

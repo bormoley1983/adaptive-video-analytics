@@ -1,0 +1,71 @@
+# AVA local identity provider (F-1-S3, ADR-14).
+#
+# Keycloak is the initial local identity provider. It runs in an isolated
+# Compose project independent of the observability stack (ops/docker-compose.yml)
+# and the GPU analytics worker.
+#
+# - Image pinned by digest (re-pin after upstream update by pulling and
+#   replacing the @sha256: reference).
+# - Host port binds to 127.0.0.1 only; service-to-service traffic uses
+#   the project network.
+# - State persists in a named volume; development credentials come from an
+#   ignored .env (see .env.example) and are never committed.
+# - Keycloak runs in dev mode for local development only; production
+#   deployments must use TLS and a persistent data store.
+#
+#   cp ops/.env.example ops/.env   # then set KEYCLOAK_ADMIN_PASSWORD
+#   docker compose -f ops/keycloak-compose.yml up -d
+#
+name: ava-identity
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
+    restart: on-failure
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in ops/.env}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD in ops/.env}
+      KC_HOSTNAME: 127.0.0.1
+      KC_PORT: 8080
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - identity-keycloak:/opt/keycloak/data
+      - ./keycloak-realm-import.json:/opt/keycloak/data/import/realm-import.json:ro
+    ports:
+      - "127.0.0.1:18080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "java -version 2>&1 | grep -q 'openjdk' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    mem_limit: 1g
+
+  postgres:
+    image: postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    restart: on-failure
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD in ops/.env}
+    volumes:
+      - identity-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    mem_limit: 256m
+
+volumes:
+  identity-keycloak:
+  identity-postgres:
