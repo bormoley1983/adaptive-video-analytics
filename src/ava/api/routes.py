@@ -7,10 +7,11 @@ transitions in routes (ADR-16).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from ..application.capabilities import CapabilityRegistry, get_capabilities
 from ..application.health import ReadinessChecker
+from ..application.identity import CallerIdentity
 from ..application.version import BuildInfo
 from .dto import (
     CapabilitiesResponse,
@@ -22,6 +23,15 @@ from .dto import (
 )
 
 router = APIRouter()
+
+def require_auth(request: Request) -> CallerIdentity:
+    """Authenticate using the policy belonging to this application."""
+    from .auth import create_auth_dependency, reject_authentication
+
+    policy = request.app.state.identity_policy
+    if policy is None:
+        reject_authentication("authentication_unavailable", "Authentication is not configured")
+    return create_auth_dependency(policy)(request)
 
 
 @router.get("/health/live", response_model=LivenessResponse)
@@ -51,7 +61,10 @@ def health_ready(request: Request) -> ReadinessResponse:
 
 
 @router.get("/version", response_model=VersionResponse)
-def version(request: Request) -> VersionResponse:
+def version(
+    request: Request,
+    caller: CallerIdentity = Depends(require_auth),  # noqa: B008
+) -> VersionResponse:
     """Build/contract/runtime version manifest."""
     info: BuildInfo = request.app.state.build_info
     return VersionResponse(
@@ -62,7 +75,10 @@ def version(request: Request) -> VersionResponse:
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse)
-def capabilities(request: Request) -> CapabilitiesResponse:
+def capabilities(
+    request: Request,
+    caller: CallerIdentity = Depends(require_auth),  # noqa: B008
+) -> CapabilitiesResponse:
     """Supported features and bounded limits.
 
     Starts empty in S2; later stories register capabilities.

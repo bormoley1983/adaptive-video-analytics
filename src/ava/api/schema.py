@@ -259,7 +259,7 @@ class Binding(BaseModel):
 
 # ── Schema loading ────────────────────────────────────────────────────────────
 
-_OPENAPI_PATH = Path(__file__).resolve().parent.parent.parent.parent / "openapi.yaml"
+_OPENAPI_PATH = Path(__file__).resolve().parent / "openapi.yaml"
 
 
 def load_schema(path: Path | None = None) -> dict[str, Any]:

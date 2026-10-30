@@ -31,7 +31,7 @@ from ava.api.schema import (
     load_schema,
 )
 
-OPENAPI_PATH = Path(__file__).resolve().parent.parent / "openapi.yaml"
+OPENAPI_PATH = Path(__file__).resolve().parent.parent / "src" / "ava" / "api" / "openapi.yaml"
 
 
 # ── Gate 1: OpenAPI document parses as valid 3.1 ──────────────────────────────
@@ -84,9 +84,13 @@ class TestOpenAPIDocument:
         }
         assert expected.issubset(schemas.keys())
 
-    def test_paths_is_empty(self):
+    def test_paths_contains_s2_endpoints(self):
         doc = load_schema(OPENAPI_PATH)
-        assert doc.get("paths") == {}
+        paths = doc.get("paths", {})
+        assert "/health/live" in paths
+        assert "/health/ready" in paths
+        assert "/version" in paths
+        assert "/capabilities" in paths
 
     def test_rejects_nonexistent_file(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):

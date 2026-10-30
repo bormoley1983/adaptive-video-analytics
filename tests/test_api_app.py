@@ -70,7 +70,14 @@ class TestAppFactory:
 class TestRoutes:
     @pytest.fixture()
     def client(self) -> TestClient:
-        app = create_app(AppConfig(package_version="0.1.0", contract_version="1.0.0"))
+        from ava.application.identity import CallerIdentity
+
+        class Policy:
+            def verify(self, token):
+                return CallerIdentity(subject="test", tenant="test", roles=frozenset({"viewer"}))
+
+        app = create_app(AppConfig(package_version="0.1.0", contract_version="1.0.0",
+                                   identity_policy=Policy()))
         return TestClient(app)
 
     def test_health_live(self, client: TestClient):
@@ -86,7 +93,7 @@ class TestRoutes:
         assert body["dependencies"] == []
 
     def test_version(self, client: TestClient):
-        r = client.get("/api/v1/version")
+        r = client.get("/api/v1/version", headers={"Authorization": "Bearer test"})
         assert r.status_code == 200
         body = r.json()
         assert body["package_version"] == "0.1.0"
@@ -94,7 +101,7 @@ class TestRoutes:
         assert "python_version" in body
 
     def test_capabilities_empty(self, client: TestClient):
-        r = client.get("/api/v1/capabilities")
+        r = client.get("/api/v1/capabilities", headers={"Authorization": "Bearer test"})
         assert r.status_code == 200
         assert r.json() == {"capabilities": []}
 
@@ -248,3 +255,29 @@ class TestDependencyDirection:
 
 # ── Gate 6: test-unit passes (this file) ─────────────────────────────────────
 # (Implicit — running this file IS the unit test.)
+
+
+def test_optional_unavailable_contributor_does_not_block_readiness():
+    class Optional:
+        required = False
+
+        def check(self):
+            return HealthReport(name="optional", state=DependencyState.UNAVAILABLE)
+
+    result = ReadinessChecker([Optional()]).check()
+    assert result.ready is True
+    assert result.reports[0].state == DependencyState.UNAVAILABLE
+
+
+def test_contributor_exception_is_reported_without_details():
+    class Broken:
+        name = "database"
+        required = True
+
+        def check(self):
+            raise RuntimeError("secret dsn")
+
+    result = ReadinessChecker([Broken()]).check()
+    assert result.ready is False
+    assert result.reports[0].name == "database"
+    assert "secret" not in (result.reports[0].detail or "")

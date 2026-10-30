@@ -40,7 +40,7 @@ Container_Boundary(api, "AVA API and control plane") {
 
 ContainerDb(postgres, "AVA PostgreSQL", "PostgreSQL 18", "Canonical configuration, state, events, incidents, evidence metadata, audit and outbox")
 ContainerDb(objects, "AVA evidence objects", "SeaweedFS S3", "Evidence, search attachments, uploads and exports")
-System_Ext(idp, "Deployment identity provider", "OIDC/JWKS and service identities")
+System_Ext(idp, "Deployment identity provider", "Keycloak initially; OIDC/JWKS and service identities")
 System_Ext(worker, "AVA processing workers", "Python PoC and later DeepStream adapters")
 System_Ext(search_backend, "Search / analysis backend", "Local measured backend or optional provider")
 System_Ext(kafka, "Deferred Kafka", "Retained/replayable event stream after explicit activation")
