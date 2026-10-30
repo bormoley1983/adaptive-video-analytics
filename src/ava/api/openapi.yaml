@@ -5,6 +5,9 @@ info:
   description: |
     Control and observation plane for adaptive video analytics.
     Contract family: ava.api/v1.
+    Every response carries an X-Request-Id header; a client-supplied canonical
+    RFC 4122 UUID is preserved, otherwise AVA generates one. A malformed value
+    yields a 400 problem response with a newly generated ID.
 servers:
   - url: /api/v1
 paths:
@@ -17,6 +20,9 @@ paths:
       responses:
         "200":
           description: Process is alive.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/json:
               schema:
@@ -35,6 +41,9 @@ paths:
       responses:
         "200":
           description: Readiness report.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/json:
               schema:
@@ -67,6 +76,9 @@ paths:
       responses:
         "200":
           description: Version information.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/json:
               schema:
@@ -81,6 +93,18 @@ paths:
                     type: string
         "401":
           description: Missing or invalid bearer token.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "400":
+          description: Malformed X-Request-Id header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/problem+json:
               schema:
@@ -94,6 +118,9 @@ paths:
       responses:
         "200":
           description: Capability list.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/json:
               schema:
@@ -118,11 +145,34 @@ paths:
                           type: ["string", "null"]
         "401":
           description: Missing or invalid bearer token.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "400":
+          description: Malformed X-Request-Id header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
 components:
+  headers:
+    XRequestId:
+      description: |
+        Trace ID for the request. A client-supplied canonical RFC 4122 UUID
+        (lowercase) is preserved and returned; otherwise AVA generates one.
+        A malformed supplied value yields a 400 problem response carrying a
+        newly generated ID; the malformed value is never reflected or logged.
+      schema:
+        type: string
+        format: uuid
+        examples: ["3f2c1b6e-9a4d-4e5f-8b7c-1d2e3f4a5b6c"]
   securitySchemes:
     BearerAuth:
       type: http
@@ -431,8 +481,10 @@ components:
           description: Human-readable explanation (no secrets/paths).
         request_id:
           type: string
-          description: Correlation ID for the request.
-          examples: ["req_71HFE865V215DE1CTEWH0AVNH9"]
+          description: |
+            Trace ID for the request (RFC 4122 UUID). Equals the X-Request-Id
+            response header.
+          examples: ["3f2c1b6e-9a4d-4e5f-8b7c-1d2e3f4a5b6c"]
         errors:
           type: array
           items:

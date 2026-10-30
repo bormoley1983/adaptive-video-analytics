@@ -62,5 +62,14 @@ def reject_authentication(code: str, detail: str) -> None:
 
 
 async def problem_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content=exc.detail,
+    """Render an HTTP exception as an RFC 9457 problem response.
+
+    The request ID resolved by the middleware is added to the body so error
+    responses are traceable like every other response.
+    """
+    content = dict(exc.detail)
+    request_id = getattr(request.state, "request_id", None)
+    if request_id is not None and "request_id" not in content:
+        content["request_id"] = request_id
+    return JSONResponse(status_code=exc.status_code, content=content,
                         headers=exc.headers, media_type="application/problem+json")
