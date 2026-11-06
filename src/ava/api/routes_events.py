@@ -1,14 +1,15 @@
-"""Authenticated read routes for events, cameras and grants (F-1-S5).
+"""Authenticated read routes for events, cameras and grants (F-1-S5, F-1-S6).
 
 Each route invokes one focused application use case and maps its result to
 the public contract. No SQL, S3, broker or business state transitions here
-(ADR-16); grant mutation is the only write in this slice and is admin-only
-(decision D5).
+(ADR-16); grant mutation is the only write in the S5 slice and is admin-only
+(decision D5). F-1-S6 adds camera soft-delete (``DELETE /cameras/{id}``) and
+state inspection (``GET /cameras/{id}``), both admin-only.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from ..application.access import AccessDenied, GrantLookupError, require_camera_access
 from ..application.event_read import (
@@ -22,6 +23,7 @@ from .auth import reject_authentication
 from .dto_events import (
     CameraItem,
     CamerasResponse,
+    CameraState,
     EventDetailResponse,
     EventEvidence,
     EventItem,
@@ -129,13 +131,22 @@ def get_event(
 def list_cameras_route(
     request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
 ) -> CamerasResponse:
-    """Inventory of cameras visible to the caller (D4)."""
+    """Inventory of cameras visible to the caller (D4).
+
+    Soft-deleted cameras are excluded when a camera registry is configured
+    (F-1-S6, ADR-19).
+    """
     state = request.app.state
     try:
         grants = {g.camera_id: g for g in state.grant_repository.list_camera_grants()}
     except GrantLookupError as exc:
         raise _problem(502, "grant_data_unusable", str(exc)) from exc
-    resources = list_cameras(grants, caller=caller)
+    # F-1-S6: filter out soft-deleted cameras when the registry is available.
+    active_ids: set[str] | None = None
+    camera_repo = state.camera_repository
+    if camera_repo is not None:
+        active_ids = {c.camera_id for c in camera_repo.list_cameras()}
+    resources = list_cameras(grants, caller=caller, active_camera_ids=active_ids)
     return CamerasResponse(
         cameras=[CameraItem(camera_id=c.camera_id, site_id=c.site_id) for c in resources]
     )
@@ -148,13 +159,37 @@ def set_grant(
     request: Request,
     caller: CallerIdentity = Depends(_caller),  # noqa: B008,
 ) -> GrantResponse:
-    """Replace the trusted assignment for a camera (admin-only, D5)."""
+    """Replace the trusted assignment for a camera (admin-only, D5).
+
+    When a camera registry is configured, the grant upsert and camera
+    re-activation are performed atomically in a single transaction
+    (F-1-S6, ADR-19) so a partial failure cannot leave the camera active
+    while the old grant still applies.
+    """
     if "admin" not in caller.roles:
         reject_authentication("insufficient_role", "admin role required")
     state = request.app.state
-    state.grant_repository.set_camera_grant(
-        camera_id, body.site_id, list(body.tenant_ids)
-    )
+    # F-1-S6: atomic grant + camera re-activation when registry is available.
+    # Configurations that cannot provide the atomic path are rejected at
+    # composition time (create_app); this check is a defensive guard.
+    camera_repo = state.camera_repository
+    if camera_repo is not None:
+        grant_repo = state.grant_repository
+        if not hasattr(grant_repo, "set_camera_grant_and_reactivate_camera"):
+            raise _problem(
+                502,
+                "atomic_grant_unavailable",
+                "grant repository does not support atomic camera re-activation; "
+                "use compose_postgres_app or a GrantRepository that implements "
+                "set_camera_grant_and_reactivate_camera (ADR-19)",
+            )
+        grant_repo.set_camera_grant_and_reactivate_camera(
+            camera_id, body.site_id, list(body.tenant_ids)
+        )
+    else:
+        state.grant_repository.set_camera_grant(
+            camera_id, body.site_id, list(body.tenant_ids)
+        )
     grant = state.grant_repository.get_camera_grant(camera_id)
     if grant is None:
         raise _problem(502, "grant_data_unusable", "grant write did not persist")
@@ -170,7 +205,11 @@ def set_grant(
 def revoke_grant(
     camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
 ) -> GrantResponse:
-    """Remove the trusted assignment for a camera (admin-only, D5)."""
+    """Remove the trusted assignment for a camera (admin-only, D5).
+
+    Grants are safe to hard-delete: events map to the camera row, not the
+    grant row, so removing a grant never breaks event-to-camera mapping.
+    """
     if "admin" not in caller.roles:
         reject_authentication("insufficient_role", "admin role required")
     state = request.app.state
@@ -181,4 +220,56 @@ def revoke_grant(
         site_id=grant.site_id if grant else None,
         tenant_ids=[],
         updated_at=grant.updated_at if grant else None,
+    )
+
+
+@router.delete("/cameras/{camera_id}", status_code=204)
+def delete_camera(
+    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
+) -> Response:
+    """Soft-delete a camera (admin-only, F-1-S6).
+
+    Sets ``deleted_at`` on the camera row instead of removing it. The row is
+    retained so that events referencing ``camera_id`` keep a resolvable target
+    (event-to-camera mapping). The camera becomes invisible to inventory and
+    scoping queries until re-activated via grant upsert. Returns 204 when an
+    active camera was deleted, 404 when no active camera exists.
+    """
+    if "admin" not in caller.roles:
+        reject_authentication("insufficient_role", "admin role required")
+    state = request.app.state
+    camera_repo = state.camera_repository
+    if camera_repo is None:
+        raise _problem(502, "camera_registry_unavailable", "camera registry is not configured")
+    deleted = camera_repo.delete_camera(camera_id)
+    if not deleted:
+        raise _problem(404, "not_found", "no active camera with this id")
+    return Response(status_code=204)
+
+
+@router.get("/cameras/{camera_id}", response_model=CameraState)
+def get_camera_state(
+    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
+) -> CameraState:
+    """Inspect the full state of a camera including soft-delete (admin-only, F-1-S6).
+
+    Returns the complete camera row including ``deleted_at`` so operators can
+    inspect soft-deleted cameras. Returns 404 when no row exists at all
+    (never created or hard-removed — but cameras are only ever soft-deleted,
+    so this means "not found").
+    """
+    if "admin" not in caller.roles:
+        reject_authentication("insufficient_role", "admin role required")
+    state = request.app.state
+    camera_repo = state.camera_repository
+    if camera_repo is None:
+        raise _problem(502, "camera_registry_unavailable", "camera registry is not configured")
+    camera = camera_repo.find_camera_by_camera_id(camera_id)
+    if camera is None:
+        raise _problem(404, "not_found", "camera not found")
+    return CameraState(
+        camera_id=camera.camera_id,
+        site_id=camera.site_id,
+        deleted_at=camera.deleted_at,
+        updated_at=camera.updated_at,
     )

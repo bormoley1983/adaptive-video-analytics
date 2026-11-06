@@ -74,7 +74,7 @@ def _row_to_grant(row: tuple) -> CameraGrant:
 class PostgresGrantRepository:
     """GrantRepository over PostgreSQL; also exposes the admin write path."""
 
-    EXPECTED_REVISION = "0002"
+    EXPECTED_REVISION = "0003"
 
     def __init__(self, dsn: str, *, pool_min: int = 1, pool_max: int = 4) -> None:
         self._dsn = dsn
@@ -132,17 +132,43 @@ class PostgresGrantRepository:
     def set_camera_grant(
         self, camera_id: str, site_id: str | None, tenant_ids: list[str]
     ) -> None:
-        """Create or replace the trusted assignment for *camera_id* (admin)."""
-        with self._pool.connection() as conn, conn.transaction():
-            conn.execute(
-                _UPSERT_GRANT_SQL, (camera_id, site_id, list(tenant_ids))
-            )
+        """Replace the assignment and atomically create or reactivate its camera."""
+        self.set_camera_grant_and_reactivate_camera(camera_id, site_id, tenant_ids)
 
     def revoke_camera_grant(self, camera_id: str) -> bool:
         """Remove the assignment for *camera_id* (admin). True if a row existed."""
         with self._pool.connection() as conn, conn.transaction():
             cur = conn.execute(_DELETE_GRANT_SQL, (camera_id,))
             return cur.rowcount > 0
+
+    def set_camera_grant_and_reactivate_camera(
+        self, camera_id: str, site_id: str | None, tenant_ids: list[str]
+    ) -> None:
+        """Atomically upsert the grant AND re-activate the camera row.
+
+        F-1-S6 (ADR-19): when an admin replaces a grant for a soft-deleted
+        camera, both the grant write and the camera re-activation must commit
+        or roll back together. This method uses a single connection/transaction
+        spanning both tables so a partial failure cannot leave the camera
+        active while the old grant still applies (or vice versa).
+
+        If no ``cameras`` row exists for *camera_id* (e.g. the registry was
+        not backfilled), the upsert creates one — consistent with the
+        migration's backfill policy.
+        """
+        _UPSERT_CAMERA_SQL = """
+        INSERT INTO cameras (camera_id, site_id, deleted_at, updated_at)
+        VALUES (%s, %s, NULL, now())
+        ON CONFLICT (camera_id) DO UPDATE
+        SET site_id = EXCLUDED.site_id,
+            deleted_at = NULL,
+            updated_at = now()
+        """
+        with self._pool.connection() as conn, conn.transaction():
+            conn.execute(
+                _UPSERT_GRANT_SQL, (camera_id, site_id, list(tenant_ids))
+            )
+            conn.execute(_UPSERT_CAMERA_SQL, (camera_id, site_id))
 
     def close(self) -> None:
         self._pool.close()

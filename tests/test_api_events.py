@@ -1,9 +1,11 @@
-"""API tests for the S5 read slice: events, cameras and grants (F-1-S5).
+"""API tests for the S5 read slice and F-1-S6 camera soft-delete.
 
-Deterministic: in-memory grant/event fakes plus real RS256 tokens via the
-JwksRsaVerifier pattern. Covers authentication, tenant/camera/site scoping,
-404 for inaccessible objects, 400 for invalid cursors, cursor traversal,
-evidence redaction and admin-only grant mutation (decisions D3-D8).
+Deterministic: in-memory grant/event/camera fakes plus real RS256 tokens via
+the JwksRsaVerifier pattern. Covers authentication, tenant/camera/site
+scoping, 404 for inaccessible objects, 400 for invalid cursors, cursor
+traversal, evidence redaction, admin-only grant mutation (decisions D3-D8),
+grant request validation (G1), and camera soft-delete with event-to-camera
+mapping preservation (F-1-S6, ADR-19).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from ava.api.app import AppConfig, create_app
-from ava.application.access import CameraGrant
+from ava.application.access import Camera, CameraGrant
 from ava.events import EventRecord, EvidenceLocator
 from ava.infrastructure.jwks_verifier import JwksRsaVerifier
 
@@ -36,8 +38,13 @@ SITE_A = "site_a"
 
 
 class FakeGrantRepository:
-    def __init__(self, grants: dict[str, CameraGrant]) -> None:
+    def __init__(
+        self,
+        grants: dict[str, CameraGrant],
+        camera_repository: FakeCameraRepository | None = None,
+    ) -> None:
         self._grants = dict(grants)
+        self._camera_repo = camera_repository
 
     def get_camera_grant(self, camera_id: str) -> CameraGrant | None:
         return self._grants.get(camera_id)
@@ -53,6 +60,14 @@ class FakeGrantRepository:
     def revoke_camera_grant(self, camera_id: str) -> bool:
         return self._grants.pop(camera_id, None) is not None
 
+    def set_camera_grant_and_reactivate_camera(
+        self, camera_id: str, site_id, tenant_ids
+    ) -> None:
+        """Atomic grant + camera re-activation (in-memory: single dict update)."""
+        if self._camera_repo is not None:
+            self._camera_repo.upsert_camera(camera_id, site_id)
+        self.set_camera_grant(camera_id, site_id, tenant_ids)
+
 
 class FakeEventRepository:
     def __init__(self, records: list[EventRecord]) -> None:
@@ -66,6 +81,56 @@ class FakeEventRepository:
 
     def list_all(self) -> list[EventRecord]:
         return list(self._records)
+
+
+class FakeCameraRepository:
+    """In-memory camera registry with soft-delete semantics (F-1-S6)."""
+
+    def __init__(self, cameras: dict[str, Camera]) -> None:
+        self._cameras = dict(cameras)
+
+    def get_camera(self, camera_id: str) -> Camera | None:
+        cam = self._cameras.get(camera_id)
+        if cam is None or cam.deleted_at is not None:
+            return None
+        return cam
+
+    def list_cameras(self) -> list[Camera]:
+        return sorted(
+            (c for c in self._cameras.values() if c.deleted_at is None),
+            key=lambda c: c.camera_id,
+        )
+
+    def upsert_camera(self, camera_id: str, site_id: str | None) -> None:
+        existing = self._cameras.get(camera_id)
+        if existing is not None:
+            # Re-activate: clear deleted_at.
+            self._cameras[camera_id] = Camera(
+                camera_id=camera_id,
+                site_id=site_id if site_id is not None else existing.site_id,
+                deleted_at=None,
+                updated_at=existing.updated_at,
+            )
+        else:
+            self._cameras[camera_id] = Camera(
+                camera_id=camera_id, site_id=site_id, deleted_at=None
+            )
+
+    def delete_camera(self, camera_id: str) -> bool:
+        cam = self._cameras.get(camera_id)
+        if cam is None or cam.deleted_at is not None:
+            return False
+        self._cameras[camera_id] = Camera(
+            camera_id=camera_id,
+            site_id=cam.site_id,
+            deleted_at="2026-11-06T00:00:00Z",
+            updated_at=cam.updated_at,
+        )
+        return True
+
+    def find_camera_by_camera_id(self, camera_id: str) -> Camera | None:
+        """Full row including soft-deleted; None when never created."""
+        return self._cameras.get(camera_id)
 
 
 def _record(event_id: str, camera_id: str, emitted_utc: str) -> EventRecord:
@@ -91,6 +156,12 @@ def _record(event_id: str, camera_id: str, emitted_utc: str) -> EventRecord:
 GRANTS = {
     CAM_A: CameraGrant(CAM_A, site_id=SITE_A, tenant_ids=frozenset({"ten_a", "ten_b"})),
     CAM_B: CameraGrant(CAM_B, site_id=None, tenant_ids=frozenset({"ten_a", "ten_b"})),
+}
+
+# Camera registry mirrors the grants (F-1-S6): one row per camera.
+CAMERAS = {
+    CAM_A: Camera(CAM_A, site_id=SITE_A),
+    CAM_B: Camera(CAM_B, site_id=None),
 }
 
 RECORDS = [
@@ -159,10 +230,13 @@ def api_client(rsa_key, jwk) -> tuple[TestClient, dict[str, Any]]:
         issuer=ISSUER, jwks_uri="https://idp.ava.test/jwks", audience=AUDIENCE,
         client=client_http,
     )
+    cam_repo = FakeCameraRepository(CAMERAS)
+    grant_repo = FakeGrantRepository(GRANTS, camera_repository=cam_repo)
     app = create_app(AppConfig(
         identity_policy=policy,
-        grant_repository=FakeGrantRepository(GRANTS),
+        grant_repository=grant_repo,
         event_repository=FakeEventRepository(RECORDS),
+        camera_repository=cam_repo,
     ))
     return TestClient(app), {"rsa_key": rsa_key}
 
@@ -373,3 +447,134 @@ class TestGrantMutation:
         r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
         cams = [c["camera_id"] for c in r.json()["cameras"]]
         assert CAM_A not in cams
+
+
+# ── Gate 5: grant request validation (G1) ─────────────────────────────────────
+
+
+class TestGrantRequestValidation:
+    def test_empty_tenant_ids_rejected_422(self, api_client):
+        """PUT /grants/{cam} with an empty tenant_ids list must return 422."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        r = client.put(
+            f"/api/v1/grants/{CAM_A}", headers=admin,
+            json={"site_id": SITE_A, "tenant_ids": []},
+        )
+        assert r.status_code == 422
+
+
+# ── Gate 6: camera soft-delete (F-1-S6) ───────────────────────────────────────
+
+
+class TestCameraSoftDelete:
+    def test_viewer_cannot_delete_camera(self, api_client):
+        """Non-admin callers cannot soft-delete a camera."""
+        client, env = api_client
+        r = client.delete(f"/api/v1/cameras/{CAM_A}", headers=_auth(env))
+        assert r.status_code == 401
+
+    def test_admin_soft_delete_sets_deleted_at(self, api_client):
+        """DELETE /cameras/{id} sets deleted_at on the camera row."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        r = client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+        assert r.status_code == 204
+
+        # The row is retained with deleted_at set.
+        repo: FakeCameraRepository = client.app.state.camera_repository
+        cam = repo.find_camera_by_camera_id(CAM_A)
+        assert cam is not None
+        assert cam.deleted_at is not None
+
+    def test_soft_deleted_camera_invisible_to_inventory(self, api_client):
+        """A soft-deleted camera does not appear in GET /cameras."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+
+        # ten_b still has a grant to CAM_A but the camera is deleted.
+        r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
+        cams = [c["camera_id"] for c in r.json()["cameras"]]
+        assert CAM_A not in cams
+
+    def test_soft_deleted_camera_events_still_accessible(self, api_client):
+        """Events of a soft-deleted camera remain accessible to granted tenants.
+
+        The camera row is retained, so event-to-camera mapping resolves and
+        the grant still governs access. This is the core rationale for
+        soft-delete on the camera entity (ADR-19).
+        """
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+
+        # ten_a still has a grant to CAM_A; events remain visible.
+        r = client.get("/api/v1/events", headers=_auth(env, tenant="ten_a"))
+        ids = [i["event_id"] for i in r.json()["items"]]
+        assert "evt_003" in ids and "evt_002" in ids
+
+    def test_reactivation_via_grant_upsert(self, api_client):
+        """PUT /grants/{id} re-activates a soft-deleted camera."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+
+        # Confirm it's gone from inventory.
+        r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
+        cams = [c["camera_id"] for c in r.json()["cameras"]]
+        assert CAM_A not in cams
+
+        # Re-activate by upserting a grant.
+        r = client.put(
+            f"/api/v1/grants/{CAM_A}", headers=admin,
+            json={"site_id": SITE_A, "tenant_ids": ["ten_a", "ten_b"]},
+        )
+        assert r.status_code == 200
+
+        # Camera is back in inventory.
+        r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
+        cams = [c["camera_id"] for c in r.json()["cameras"]]
+        assert CAM_A in cams
+
+
+# ── Gate 7: camera state inspection (F-1-S6) ──────────────────────────────────
+
+
+class TestCameraStateEndpoint:
+    def test_viewer_cannot_inspect_camera_state(self, api_client):
+        """Non-admin callers cannot inspect camera state."""
+        client, env = api_client
+        r = client.get(f"/api/v1/cameras/{CAM_A}", headers=_auth(env))
+        assert r.status_code == 401
+
+    def test_admin_can_inspect_active_camera(self, api_client):
+        """GET /cameras/{id} returns the full row for an active camera."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        r = client.get(f"/api/v1/cameras/{CAM_A}", headers=admin)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["camera_id"] == CAM_A
+        assert body["site_id"] == SITE_A
+        assert body["deleted_at"] is None
+
+    def test_admin_can_inspect_soft_deleted_camera(self, api_client):
+        """GET /cameras/{id} returns the row with deleted_at for a deleted camera."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+
+        r = client.get(f"/api/v1/cameras/{CAM_A}", headers=admin)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["camera_id"] == CAM_A
+        assert body["deleted_at"] is not None
+
+    def test_missing_camera_is_404(self, api_client):
+        """GET /cameras/{id} returns 404 when no row exists."""
+        client, env = api_client
+        admin = _auth(env, roles=["admin"])
+        r = client.get("/api/v1/cameras/cam_never_created", headers=admin)
+        assert r.status_code == 404
+        assert r.json()["detail"]["code"] == "not_found"

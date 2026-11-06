@@ -74,3 +74,17 @@ class GrantResponse(BaseModel):
     site_id: str | None = None
     tenant_ids: list[str] = []
     updated_at: str | None = None
+
+
+class CameraState(BaseModel):
+    """GET /api/v1/cameras/{camera_id} response (admin, F-1-S6).
+
+    Exposes the full camera row including ``deleted_at`` so operators can
+    inspect soft-deleted cameras. Grants are independently revocable via
+    hard delete; this endpoint reflects camera state only.
+    """
+
+    camera_id: str
+    site_id: str | None = None
+    deleted_at: str | None = None
+    updated_at: str | None = None

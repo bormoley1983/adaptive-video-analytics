@@ -49,6 +49,7 @@ from alembic import command
 from ava.api.app import AppConfig, create_app
 from ava.application.identity import CallerIdentity, TokenValidationError
 from ava.events import EventRecord, EvidenceLocator
+from ava.persistence.cameras_postgres import PostgresCameraRepository
 from ava.persistence.grants_postgres import PostgresGrantRepository
 from ava.persistence.postgres import PostgresEventSink
 
@@ -177,6 +178,7 @@ class TestPackagedApiIntegration:
         pg = isolated_schema
         sink = PostgresEventSink(pg["dsn"])
         repo = PostgresGrantRepository(pg["dsn"])
+        cam_repo = PostgresCameraRepository(pg["dsn"])
         try:
             app = create_app(
                 AppConfig(
@@ -185,12 +187,14 @@ class TestPackagedApiIntegration:
                     identity_policy=DevIdentityPolicy(),
                     grant_repository=repo,
                     event_repository=sink,
+                    camera_repository=cam_repo,
                 )
             )
             yield TestClient(app), sink, repo
         finally:
             sink.close()
             repo.close()
+            cam_repo.close()
 
     def _seed(self, sink: PostgresEventSink, repo: PostgresGrantRepository) -> None:
         for event_id, camera, timestamp in [

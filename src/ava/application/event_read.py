@@ -155,11 +155,18 @@ def list_cameras(
     grants: dict[str, CameraGrant],
     *,
     caller: CallerIdentity,
+    active_camera_ids: set[str] | None = None,
 ) -> list[CameraResource]:
-    """Inventory of cameras visible to the caller (D4), sorted by ID."""
+    """Inventory of cameras visible to the caller (D4), sorted by ID.
+
+    When *active_camera_ids* is provided, only cameras in that set are
+    included (F-1-S6: soft-deleted cameras are excluded from inventory).
+    When None, all granted cameras are returned (backward-compatible).
+    """
     resources = [
         CameraResource(camera_id=g.camera_id, site_id=g.site_id)
         for g in grants.values()
         if camera_accessible(g, caller)
+        and (active_camera_ids is None or g.camera_id in active_camera_ids)
     ]
     return sorted(resources, key=lambda c: c.camera_id)
