@@ -30,6 +30,10 @@ class EventRepository(Protocol):
     def find_by_event_id(self, event_id: str) -> EventRecord | None:
         ...
 
+    def list_all(self) -> list[EventRecord]:
+        """Return all stored records; scoping is the read service's job."""
+        ...
+
     def list_by_camera(
         self, camera_id: str, *, before: float | None = None, limit: int = 100
     ) -> list[EventRecord]:

@@ -92,6 +92,14 @@ class TestOpenAPIDocument:
         assert "/version" in paths
         assert "/capabilities" in paths
 
+    def test_paths_contains_s5_endpoints(self):
+        doc = load_schema(OPENAPI_PATH)
+        paths = doc.get("paths", {})
+        assert "/events" in paths
+        assert "/events/{event_id}" in paths
+        assert "/cameras" in paths
+        assert "/grants/{camera_id}" in paths
+
     def test_rejects_nonexistent_file(self, tmp_path):
         with pytest.raises(ValueError, match="not found"):
             load_schema(tmp_path / "nope.yaml")
@@ -122,7 +130,9 @@ class TestExamplesValidate:
         for name, schema in schemas.items():
             if "examples" not in schema:
                 continue
-            for example in schema["examples"]:
+            examples = schema["examples"]
+            items = examples.values() if isinstance(examples, dict) else examples
+            for example in items:
                 _validate_against_schema(example, schema, f"{name}.example={example!r}")
                 checked += 1
         assert checked > 0, "no examples found in the document"
