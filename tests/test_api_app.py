@@ -281,3 +281,70 @@ def test_contributor_exception_is_reported_without_details():
     assert result.ready is False
     assert result.reports[0].name == "database"
     assert "secret" not in (result.reports[0].detail or "")
+
+
+# ── F-1-S6: composition-time validation of camera registry invariant ─────────
+
+
+class TestCameraRegistryComposition:
+    """F-1-S6 (ADR-19): the camera registry is required when grant and event
+    repositories are configured. Grant writes without a registry would create
+    cameras absent from the registry, breaking inventory filtering and state
+    inspection when the same database is later served through
+    compose_postgres_app."""
+
+    def _make_repos(self) -> tuple[object, object, object]:
+        """Minimal fakes satisfying the composition-time checks."""
+        class FakeGrant:
+            def get_camera_grant(self, camera_id): return None
+            def list_camera_grants(self): return []
+            def set_camera_grant(self, *a): pass
+            def revoke_camera_grant(self, camera_id): return False
+            def set_camera_grant_and_reactivate_camera(self, *a): pass
+
+        class FakeEvent:
+            def list_all(self): return []
+            def find_by_event_id(self, event_id): return None
+
+        class FakeCamera:
+            def get_camera(self, camera_id): return None
+            def list_cameras(self): return []
+            def upsert_camera(self, *a): pass
+            def delete_camera(self, camera_id): return False
+            def find_camera_by_camera_id(self, camera_id): return None
+
+        return FakeGrant(), FakeEvent(), FakeCamera()
+
+    def test_grant_and_event_without_camera_raises(self):
+        """grant + event repos without camera repo → ValueError at composition."""
+        grant_repo, event_repo, _ = self._make_repos()
+        with pytest.raises(ValueError, match="camera_repository is missing"):
+            create_app(AppConfig(
+                grant_repository=grant_repo,
+                event_repository=event_repo,
+            ))
+
+    def test_all_three_repos_accepted(self):
+        """All three repos configured → app is created successfully."""
+        grant_repo, event_repo, cam_repo = self._make_repos()
+        app = create_app(AppConfig(
+            grant_repository=grant_repo,
+            event_repository=event_repo,
+            camera_repository=cam_repo,
+        ))
+        assert app.state.camera_repository is cam_repo
+
+    def test_camera_without_grant_or_event_accepted(self):
+        """Camera repo alone (no grant/event) → no validation error."""
+        _, _, cam_repo = self._make_repos()
+        app = create_app(AppConfig(camera_repository=cam_repo))
+        # camera_repository is only wired into app.state when grant+event are set.
+        assert not hasattr(app.state, "camera_repository") or \
+            app.state.camera_repository is None
+
+    def test_grant_without_event_or_camera_accepted(self):
+        """Grant repo alone → no validation error (read-only config)."""
+        grant_repo, _, _ = self._make_repos()
+        app = create_app(AppConfig(grant_repository=grant_repo))
+        assert not hasattr(app.state, "grant_repository") or \
+            app.state.grant_repository is None

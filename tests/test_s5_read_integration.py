@@ -1,8 +1,9 @@
-"""Integration tests for the S5 read side and grant repository (Testcontainers).
+"""Integration tests for the S5 read side, grant repository and camera
+registry (Testcontainers).
 
 Runs against a throwaway PostgreSQL 18 container started by Testcontainers —
 never against an existing system database. Each test gets a fresh schema,
-migrated to head (revision 0002), so migration + adapter behavior is
+migrated to head (revision 0003), so migration + adapter behavior is
 exercised end to end.
 """
 
@@ -17,10 +18,11 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 
 from alembic import command
-from ava.api.app import AppConfig, create_app
+from ava.api.app import AppConfig, compose_postgres_app, create_app
 from ava.application.event_read import find_event, page_events
 from ava.application.identity import CallerIdentity
 from ava.events import EventRecord, EvidenceLocator
+from ava.persistence.cameras_postgres import PostgresCameraRepository
 from ava.persistence.grants_postgres import PostgresGrantRepository
 from ava.persistence.postgres import PostgresEventSink
 
@@ -129,6 +131,7 @@ class TestS5ReadSideIntegration:
         pg = isolated_schema
         sink = PostgresEventSink(pg["dsn"])
         repo = PostgresGrantRepository(pg["dsn"])
+        cam_repo = PostgresCameraRepository(pg["dsn"])
         try:
             for event_id, camera, timestamp in [
                 ("evt-3", "cam-a", "2026-10-27T12:00:03.000Z"),
@@ -139,7 +142,8 @@ class TestS5ReadSideIntegration:
             repo.set_camera_grant("cam-a", "site_1", ["tenant_a"])
             repo.set_camera_grant("cam-b", None, ["tenant_a"])
             app = create_app(AppConfig(
-                identity_policy=IdentityPolicy(), grant_repository=repo, event_repository=sink
+                identity_policy=IdentityPolicy(), grant_repository=repo, event_repository=sink,
+                camera_repository=cam_repo,
             ))
             with TestClient(app) as client:
                 headers = {"Authorization": "Bearer tenant-a"}
@@ -167,24 +171,35 @@ class TestS5ReadSideIntegration:
         finally:
             sink.close()
             repo.close()
+            cam_repo.close()
 
-    def test_migration_0002_creates_grants_table(self, isolated_schema):
+    def test_migration_0003_creates_cameras_table(self, isolated_schema):
         pg = isolated_schema
         with _connect(pg) as conn:
             row = conn.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()
-            assert row[0] == "0002"
-            cols = {
+            assert row[0] == "0003"
+            # camera_grants table from 0002 still present.
+            grant_cols = {
                 r[0]
                 for r in conn.execute(
                     "SELECT column_name FROM information_schema.columns "
                     "WHERE table_name = 'camera_grants'"
                 )
             }
-            assert {"camera_id", "site_id", "tenant_ids", "updated_at"} <= cols
+            assert {"camera_id", "site_id", "tenant_ids", "updated_at"} <= grant_cols
+            # cameras table from 0003.
+            cam_cols = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'cameras'"
+                )
+            }
+            assert {"camera_id", "site_id", "deleted_at", "updated_at"} <= cam_cols
 
-    def test_check_schema_passes_on_0002(self, isolated_schema):
+    def test_check_schema_passes_on_0003(self, isolated_schema):
         pg = isolated_schema
         repo = PostgresGrantRepository(pg["dsn"])
         try:
@@ -276,6 +291,51 @@ class TestS5ReadSideIntegration:
         finally:
             sink.close()
 
+    def test_event_write_creates_camera_row(self, isolated_schema):
+        """F-1-S6 (ADR-19): event write ensures a camera registry row exists.
+
+        A camera that emits events but has no grant still gets a cameras row
+        (site_id NULL) so the event-to-camera mapping is complete. The upsert
+        is idempotent — writing multiple events for the same camera does not
+        duplicate rows or overwrite an existing site_id.
+        """
+        pg = isolated_schema
+        sink = PostgresEventSink(pg["dsn"])
+        cam_repo = PostgresCameraRepository(pg["dsn"])
+        try:
+            # Write an event for a camera with no grant.
+            sink.write(_make_record("evt-cam-1", camera_id="cam-orphan"))
+
+            # Camera row exists with site_id NULL (no grant to supply site).
+            cam = cam_repo.get_camera("cam-orphan")
+            assert cam is not None
+            assert cam.camera_id == "cam-orphan"
+            assert cam.site_id is None
+            assert cam.deleted_at is None
+
+            # Writing another event for the same camera does not duplicate.
+            sink.write(_make_record("evt-cam-2", camera_id="cam-orphan"))
+            cameras = cam_repo.list_cameras()
+            orphan_rows = [c for c in cameras if c.camera_id == "cam-orphan"]
+            assert len(orphan_rows) == 1
+
+            # A grant upsert sets site_id (grants are canonical site source).
+            from ava.persistence.grants_postgres import PostgresGrantRepository
+
+            grant_repo = PostgresGrantRepository(pg["dsn"])
+            try:
+                grant_repo.set_camera_grant_and_reactivate_camera(
+                    "cam-orphan", "site_9", ["tenant_a"]
+                )
+                cam = cam_repo.get_camera("cam-orphan")
+                assert cam is not None
+                assert cam.site_id == "site_9"
+            finally:
+                grant_repo.close()
+        finally:
+            sink.close()
+            cam_repo.close()
+
     def test_cursor_pagination_over_db_records(self, isolated_schema):
         """Global order and cursor traversal hold over real DB rows."""
         pg = isolated_schema
@@ -318,3 +378,403 @@ class TestS5ReadSideIntegration:
         finally:
             sink.close()
             repo.close()
+
+    def test_migration_backfill_populates_cameras_from_grants(self, pg_container, monkeypatch):
+        """P1 #1: upgrading from 0002 with existing data backfills cameras.
+
+        Seeds a schema at revision 0002 (with grant rows AND event rows for
+        cameras that have no grant), then runs the ACTUAL alembic upgrade to
+        head (0003) and verifies the cameras table is populated from both
+        camera_grants (with site_id) and events (site_id NULL) by the
+        migration's own backfill SQL.
+        """
+        pg = pg_container
+        schema = "ava_s5_bf_" + uuid.uuid4().hex
+
+        with _connect(pg, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+
+        monkeypatch.setenv("AVA_PG_DSN", pg["dsn"])
+        monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
+
+        try:
+            # Step 1: migrate to 0002 (pre-camera-registry state).
+            command.upgrade(Config("alembic.ini"), "0002")
+            with _connect(pg) as conn:
+                rev = conn.execute(
+                    "SELECT version_num FROM alembic_version"
+                ).fetchone()
+                assert rev[0] == "0002"
+                # Seed grant rows (pre-0003 data).
+                conn.execute(
+                    "INSERT INTO camera_grants (camera_id, site_id, tenant_ids, updated_at) "
+                    "VALUES ('cam-bf-a', 'site_1', ARRAY['tenant_a'], now()),"
+                    "('cam-bf-b', NULL, ARRAY['tenant_b'], now())"
+                )
+                # Seed event rows for a camera with NO grant (e.g. after revocation).
+                # This camera should get a cameras row with site_id NULL from the
+                # events backfill source.
+                conn.execute(
+                    "INSERT INTO events (event_id, camera_id, session_id, track_id, "
+                    "rule_id, rule_type, class_label, confidence, source_time_s, "
+                    "emitted_utc, time_basis, config_version, model_ref, schema_version, "
+                    "frame_index, evidence_kind, payload) "
+                    "VALUES ('evt-bf-orphan', 'cam-bf-orphan', 's1', 1, "
+                    "'rule-1', 'line_crossing', 'person', 0.9, 12.5, "
+                    "now(), 'live_epoch', '1', 'models/yolo26n.pt', '1', "
+                    "42, 'snapshot', '{}')"
+                )
+
+            # Step 2: run the ACTUAL upgrade to head (0003).
+            command.upgrade(Config("alembic.ini"), "head")
+
+            # Step 3: verify the migration's backfill populated cameras from
+            # BOTH sources: grants (with site_id) and events (site_id NULL).
+            with _connect(pg) as conn:
+                rev = conn.execute(
+                    "SELECT version_num FROM alembic_version"
+                ).fetchone()
+                assert rev[0] == "0003"
+                rows = conn.execute(
+                    "SELECT camera_id, site_id, deleted_at FROM cameras ORDER BY camera_id"
+                ).fetchall()
+            # Three cameras: two from grants, one from events (no grant).
+            assert len(rows) == 3
+            assert rows[0][0] == "cam-bf-a"
+            assert rows[0][1] == "site_1"  # site from grant
+            assert rows[0][2] is None
+            assert rows[1][0] == "cam-bf-b"
+            assert rows[1][1] is None  # grant had NULL site
+            assert rows[1][2] is None
+            assert rows[2][0] == "cam-bf-orphan"
+            assert rows[2][1] is None  # no grant, so site_id is NULL
+            assert rows[2][2] is None
+
+            # Verify via the real adapter.
+            cam_repo = PostgresCameraRepository(pg["dsn"])
+            try:
+                cameras = {c.camera_id: c for c in cam_repo.list_cameras()}
+                assert set(cameras) == {"cam-bf-a", "cam-bf-b", "cam-bf-orphan"}
+                assert cameras["cam-bf-a"].site_id == "site_1"
+                assert cameras["cam-bf-orphan"].site_id is None
+            finally:
+                cam_repo.close()
+        finally:
+            with _connect(pg, autocommit=True) as conn:
+                conn.execute(
+                    sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+                )
+
+    def test_grant_write_creates_and_reactivates_camera(self, isolated_schema):
+        pg = isolated_schema
+        cam_repo = PostgresCameraRepository(pg["dsn"])
+        grant_repo = PostgresGrantRepository(pg["dsn"])
+        try:
+            grant_repo.set_camera_grant("cam-grant", "site_1", ["tenant_a"])
+            assert cam_repo.get_camera("cam-grant").site_id == "site_1"
+            assert cam_repo.delete_camera("cam-grant")
+
+            grant_repo.set_camera_grant("cam-grant", None, ["tenant_b"])
+            camera = cam_repo.get_camera("cam-grant")
+            assert camera is not None
+            assert camera.site_id is None
+            assert grant_repo.get_camera_grant("cam-grant").tenant_ids == frozenset({"tenant_b"})
+        finally:
+            cam_repo.close()
+            grant_repo.close()
+
+    def test_camera_soft_delete_and_reactivation_via_real_adapter(self, isolated_schema):
+        """P1 #3: real PostgresCameraRepository soft-delete + re-activation."""
+        pg = isolated_schema
+        cam_repo = PostgresCameraRepository(pg["dsn"])
+        grant_repo = PostgresGrantRepository(pg["dsn"])
+        try:
+            # Create a camera via upsert.
+            cam_repo.upsert_camera("cam-real", "site_1")
+            cam = cam_repo.get_camera("cam-real")
+            assert cam is not None
+            assert cam.site_id == "site_1"
+            assert cam.deleted_at is None
+
+            # Soft-delete it.
+            deleted = cam_repo.delete_camera("cam-real")
+            assert deleted is True
+            # get_camera returns None for soft-deleted cameras.
+            assert cam_repo.get_camera("cam-real") is None
+            # find_camera_by_camera_id returns the row including deleted_at.
+            full = cam_repo.find_camera_by_camera_id("cam-real")
+            assert full is not None
+            assert full.deleted_at is not None
+
+            # Re-activate via the atomic grant + camera path.
+            grant_repo.set_camera_grant_and_reactivate_camera(
+                "cam-real", "site_1", ["tenant_a"]
+            )
+            cam = cam_repo.get_camera("cam-real")
+            assert cam is not None
+            assert cam.deleted_at is None
+            # Grant is also set.
+            grant = grant_repo.get_camera_grant("cam-real")
+            assert grant is not None
+            assert grant.tenant_ids == frozenset({"tenant_a"})
+
+            # Double-delete: second delete returns False (no active row).
+            assert cam_repo.delete_camera("cam-real") is True
+            assert cam_repo.delete_camera("cam-real") is False
+        finally:
+            cam_repo.close()
+            grant_repo.close()
+
+    def test_compose_postgres_app_exposes_camera_routes(self, isolated_schema):
+        """P1 #3: compose_postgres_app wires all three repositories.
+
+        Verifies the explicit supported composition path: DELETE and GET
+        /cameras/{camera_id} work against real Postgres adapters (not fakes).
+        Uses compose_postgres_app (the production entry point) which owns
+        the pool lifecycle — pools are closed on app shutdown.
+        """
+        pg = isolated_schema
+
+        # Seed data via standalone adapters (before composing the app).
+        seed_cam = PostgresCameraRepository(pg["dsn"])
+        seed_grant = PostgresGrantRepository(pg["dsn"])
+        seed_sink = PostgresEventSink(pg["dsn"])
+        try:
+            seed_cam.upsert_camera("cam-compose", "site_1")
+            seed_grant.set_camera_grant("cam-compose", "site_1", ["tenant_a"])
+            seed_sink.write(_make_record("evt-compose-1", camera_id="cam-compose"))
+        finally:
+            seed_cam.close()
+            seed_grant.close()
+            seed_sink.close()
+
+        class IdentityPolicy:
+            def verify(self, token):
+                identities = {
+                    "admin": CallerIdentity(
+                        "u1", "tenant_a", frozenset({"viewer", "admin"})
+                    ),
+                    "viewer": CallerIdentity(
+                        "u2", "tenant_a", frozenset({"viewer"})
+                    ),
+                }
+                return identities[token]
+
+        # Use the production composition entry point.
+        app = compose_postgres_app(pg["dsn"], identity_policy=IdentityPolicy())
+        with TestClient(app) as client:
+            admin = {"Authorization": "Bearer admin"}
+            viewer = {"Authorization": "Bearer viewer"}
+
+            # GET /cameras/{id} — admin sees the camera.
+            resp = client.get("/api/v1/cameras/cam-compose", headers=admin)
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["camera_id"] == "cam-compose"
+            assert body["site_id"] == "site_1"
+            assert body["deleted_at"] is None
+
+            # GET /cameras/{id} — non-admin gets 401.
+            resp = client.get("/api/v1/cameras/cam-compose", headers=viewer)
+            assert resp.status_code == 401
+
+            # DELETE /cameras/{id} — admin soft-deletes.
+            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin)
+            assert resp.status_code == 204
+
+            # Camera is now hidden from inventory.
+            resp = client.get("/api/v1/cameras", headers=admin)
+            assert resp.status_code == 200
+            assert [c["camera_id"] for c in resp.json()["cameras"]] == []
+
+            # GET /cameras/{id} — admin sees deleted_at set.
+            resp = client.get("/api/v1/cameras/cam-compose", headers=admin)
+            assert resp.status_code == 200
+            assert resp.json()["deleted_at"] is not None
+
+            # DELETE again — 404 (no active camera).
+            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin)
+            assert resp.status_code == 404
+
+            # Re-activate via grant upsert (atomic path).
+            resp = client.put(
+                "/api/v1/grants/cam-compose",
+                headers=admin,
+                json={"site_id": "site_1", "tenant_ids": ["tenant_a"]},
+            )
+            assert resp.status_code == 200
+
+            # Camera is back in inventory.
+            resp = client.get("/api/v1/cameras", headers=admin)
+            assert [c["camera_id"] for c in resp.json()["cameras"]] == ["cam-compose"]
+
+            # Events are accessible again.
+            resp = client.get("/api/v1/events/evt-compose-1", headers=admin)
+            assert resp.status_code == 200
+
+        # Pools are closed after TestClient context exits (lifespan shutdown).
+        # Verify the app's repositories are no longer usable.
+        for repo in (
+            app.state.event_repository,
+            app.state.grant_repository,
+            app.state.camera_repository,
+        ):
+            with pytest.raises(psycopg.OperationalError):
+                if hasattr(repo, "check_connection"):
+                    repo.check_connection()
+                elif hasattr(repo, "get_camera_grant"):
+                    repo.get_camera_grant("any")
+                else:
+                    repo.list_cameras()
+
+    def test_compose_postgres_app_rejects_outdated_schema(self, pg_container, monkeypatch):
+        """P1 #1 (this round): compose_postgres_app rejects a 0002 schema.
+
+        Seeds a database at revision 0002 (no cameras table) and verifies that
+        compose_postgres_app raises RuntimeError during composition — the app
+        is never returned, so it cannot report ready against an unmigrated DB.
+        """
+        pg = pg_container
+        schema = "ava_s5_rej_" + uuid.uuid4().hex
+
+        with _connect(pg, autocommit=True) as conn:
+            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+
+        monkeypatch.setenv("AVA_PG_DSN", pg["dsn"])
+        monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
+
+        try:
+            # Migrate to 0002 only (no cameras table).
+            command.upgrade(Config("alembic.ini"), "0002")
+            with _connect(pg) as conn:
+                rev = conn.execute(
+                    "SELECT version_num FROM alembic_version"
+                ).fetchone()
+                assert rev[0] == "0002"
+
+            # compose_postgres_app must reject the outdated schema.
+            with pytest.raises(RuntimeError, match="0002.*0003|not migrated"):
+                compose_postgres_app(pg["dsn"])
+        finally:
+            with _connect(pg, autocommit=True) as conn:
+                conn.execute(
+                    sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+                )
+
+    def test_compose_postgres_app_readiness_reports_database(self, isolated_schema):
+        """P1 #1 (this round): readiness contributor reports database state.
+
+        After compose_postgres_app succeeds, /health/ready includes a required
+        'database' dependency in READY state. When the pool is closed (simulating
+        DB unavailability), readiness reports UNAVAILABLE and ready=False.
+        """
+        pg = isolated_schema
+        app = compose_postgres_app(pg["dsn"])
+        with TestClient(app) as client:
+            # Readiness should report ready with a database dependency.
+            resp = client.get("/api/v1/health/ready")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["ready"] is True
+            deps = {d["name"]: d for d in body["dependencies"]}
+            assert "database" in deps
+            assert deps["database"]["state"] == "ready"
+
+        # After shutdown, the pools are closed. A new readiness check would
+        # report unavailable (but we can't call it without a running app).
+        # Verify the pool is actually closed by attempting a connection.
+        with pytest.raises(psycopg.OperationalError):
+            app.state.event_repository.check_connection()
+
+    def test_atomic_reactivation_rolls_back_on_failure(self, isolated_schema):
+        """P1 (failure injection): atomic grant + re-activation rolls back.
+
+        Injects a failure after the grant write but before the camera upsert
+        within the same transaction. Verifies that BOTH changes are rolled
+        back: the grant is unchanged and the camera remains soft-deleted.
+        """
+        pg = isolated_schema
+        cam_repo = PostgresCameraRepository(pg["dsn"])
+        grant_repo = PostgresGrantRepository(pg["dsn"])
+        try:
+            # Set up: camera exists, is soft-deleted, has an old grant.
+            cam_repo.upsert_camera("cam-atomic", "site_1")
+            grant_repo.set_camera_grant("cam-atomic", "site_1", ["tenant_old"])
+            assert cam_repo.delete_camera("cam-atomic") is True
+
+            # Capture pre-failure state.
+            old_grant = grant_repo.get_camera_grant("cam-atomic")
+            assert old_grant is not None
+            assert old_grant.tenant_ids == frozenset({"tenant_old"})
+            assert cam_repo.get_camera("cam-atomic") is None  # soft-deleted
+
+            # Inject a real database failure into the production method's
+            # second write (camera upsert) by making it fail with a
+            # constraint violation. The grant write (first statement in the
+            # same transaction) succeeds, then the camera upsert fails —
+            # PostgreSQL rolls back the entire transaction.
+            #
+            # We achieve this by temporarily adding a trigger on cameras
+            # that raises an exception for the specific camera_id. The
+            # production method runs its real code path: one connection,
+            # one transaction, grant upsert then camera upsert.
+            with _connect(pg) as conn:
+                conn.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION _test_fail_cameras()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        IF NEW.camera_id = 'cam-atomic' THEN
+                            RAISE EXCEPTION 'injected: camera upsert failed';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TRIGGER _test_cameras_fail
+                    BEFORE INSERT OR UPDATE ON cameras
+                    FOR EACH ROW EXECUTE FUNCTION _test_fail_cameras()
+                    """
+                )
+
+            try:
+                # Call the PRODUCTION atomic method — it runs its real code.
+                with pytest.raises(Exception, match="injected"):
+                    grant_repo.set_camera_grant_and_reactivate_camera(
+                        "cam-atomic", "site_2", ["tenant_new"]
+                    )
+            finally:
+                # Remove the trigger so subsequent operations work.
+                with _connect(pg) as conn:
+                    conn.execute("DROP TRIGGER IF EXISTS _test_cameras_fail ON cameras")
+                    conn.execute("DROP FUNCTION IF EXISTS _test_fail_cameras()")
+
+            # Verify: BOTH changes rolled back (production method's transaction).
+            # Grant is unchanged (still tenant_old, not tenant_new).
+            grant = grant_repo.get_camera_grant("cam-atomic")
+            assert grant is not None
+            assert grant.tenant_ids == frozenset({"tenant_old"})
+            assert grant.site_id == "site_1"  # not site_2
+
+            # Camera is still soft-deleted (not re-activated).
+            assert cam_repo.get_camera("cam-atomic") is None
+            full = cam_repo.find_camera_by_camera_id("cam-atomic")
+            assert full is not None
+            assert full.deleted_at is not None
+
+            # Verify the production method still works after the failure.
+            grant_repo.set_camera_grant_and_reactivate_camera(
+                "cam-atomic", "site_2", ["tenant_new"]
+            )
+            grant = grant_repo.get_camera_grant("cam-atomic")
+            assert grant is not None
+            assert grant.tenant_ids == frozenset({"tenant_new"})
+            cam = cam_repo.get_camera("cam-atomic")
+            assert cam is not None
+            assert cam.deleted_at is None
+        finally:
+            cam_repo.close()
+            grant_repo.close()

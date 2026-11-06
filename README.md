@@ -174,3 +174,12 @@ tenant and passes their site restriction; revocation removes access on the
 next read. Events are neutral — no tenant field, no local paths or RTSP
 URLs; evidence is reported as kind only. Missing, ungranted or
 site-invisible events return 404 without leaking existence.
+
+The event API requires event, grant and camera repositories together. Existing
+callers that construct `AppConfig` with only event and grant repositories must
+also provide a camera repository. For PostgreSQL, `compose_postgres_app(dsn,
+identity_policy=...)` constructs and validates all three repositories and
+closes their pools when the app shuts down. Apply Alembic migration 0003 before
+starting the updated service. Camera deletion hides the camera from inventory;
+its event history remains accessible according to current grants and site
+restrictions. Grant replacement creates or reactivates the camera atomically.

@@ -42,6 +42,17 @@ INSERT INTO outbox (event_id, aggregate_type, payload)
 VALUES (%s, 'event', %s::jsonb)
 """
 
+# F-1-S6 (ADR-19): ensure the camera registry has a row for every camera
+# that emits events. site_id is NULL because the event sink does not carry
+# site assignment — grants are the canonical source of site. If a grant
+# already exists for this camera, its upsert will set site_id. This keeps
+# the event-to-camera mapping complete without inventing site assignments.
+_ENSURE_CAMERA_SQL = """
+INSERT INTO cameras (camera_id, site_id, updated_at)
+VALUES (%s, NULL, now())
+ON CONFLICT (camera_id) DO NOTHING
+"""
+
 _SELECT_EVENTS_SQL = """
 SELECT event_id, camera_id, session_id, track_id, rule_id, rule_type,
        class_label, confidence, source_time_s, emitted_utc, capture_utc,
@@ -123,7 +134,7 @@ class PostgresEventSink:
             raise
         self._pool = pool
 
-    EXPECTED_REVISION = "0002"
+    EXPECTED_REVISION = "0003"
 
     def check_connection(self) -> None:
         """Verify a database connection is available."""
@@ -158,7 +169,13 @@ class PostgresEventSink:
             )
 
     def write(self, record: EventRecord) -> bool:
-        """Insert event + outbox atomically. Returns False on duplicate."""
+        """Insert event + outbox atomically. Returns False on duplicate.
+
+        F-1-S6 (ADR-19): also ensures a camera registry row exists for the
+        event's camera_id so the event-to-camera mapping is complete even
+        for cameras that have no grant. The upsert is idempotent and uses
+        site_id NULL (grants are the canonical site source).
+        """
         payload_json = json.dumps(record.payload)
         with self._pool.connection() as conn, conn.transaction():
             cur = conn.execute(
@@ -195,6 +212,8 @@ class PostgresEventSink:
                     "camera_id": record.camera_id,
                 })),
             )
+            # F-1-S6: ensure camera registry row exists for this camera.
+            conn.execute(_ENSURE_CAMERA_SQL, (record.camera_id,))
         return True
 
     def find_by_event_id(self, event_id: str) -> EventRecord | None:

@@ -324,6 +324,11 @@ paths:
     delete:
       operationId: revokeGrant
       summary: Remove the trusted assignment for a camera (admin)
+      description: |
+        Hard-deletes the grant row. Grants are safe to remove because events
+        map to the camera row, not the grant row, so revoking a grant never
+        breaks event-to-camera mapping. Use DELETE /cameras/{camera_id} to
+        soft-delete the camera itself (F-1-S6).
       security:
         - BearerAuth: []
       parameters:
@@ -344,6 +349,92 @@ paths:
                 $ref: "#/components/schemas/GrantResponse"
         "401":
           description: Missing, invalid token or non-admin caller.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+  /cameras/{camera_id}:
+    get:
+      operationId: getCameraState
+      summary: Inspect the full state of a camera (admin)
+      description: |
+        Returns the complete camera row including ``deleted_at`` so operators
+        can inspect soft-deleted cameras. Returns 404 when no row exists at
+        all. Admin-only (F-1-S6).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: camera_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The full camera state including soft-delete marker.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CameraState"
+        "401":
+          description: Missing, invalid token or non-admin caller.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: No camera row exists for this ID.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    delete:
+      operationId: deleteCamera
+      summary: Soft-delete a camera (admin)
+      description: |
+        Sets ``deleted_at`` on the camera row instead of removing it. The row
+        is retained so that events referencing ``camera_id`` keep a resolvable
+        target (event-to-camera mapping). The camera becomes invisible to
+        inventory and scoping queries until re-activated via grant upsert.
+        Returns 204 when an active camera was deleted, 404 when no active
+        camera exists. Admin-only (F-1-S6).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: camera_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Camera soft-deleted successfully.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+        "401":
+          description: Missing, invalid token or non-admin caller.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "404":
+          description: No active camera exists for this ID.
           headers:
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
@@ -828,6 +919,27 @@ components:
           type: array
           items:
             type: string
+        updated_at:
+          type: ["string", "null"]
+          format: date-time
+
+    CameraState:
+      type: object
+      description: |
+        Full camera row including soft-delete marker (admin-only, F-1-S6).
+        Exposes ``deleted_at`` so operators can inspect soft-deleted cameras.
+        Grants are independently revocable via hard delete; this schema
+        reflects camera state only.
+      required: [camera_id]
+      properties:
+        camera_id:
+          type: string
+        site_id:
+          type: ["string", "null"]
+        deleted_at:
+          type: ["string", "null"]
+          format: date-time
+          description: Set when the camera is soft-deleted; null while active.
         updated_at:
           type: ["string", "null"]
           format: date-time
