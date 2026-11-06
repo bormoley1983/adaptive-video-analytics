@@ -35,3 +35,7 @@ benchmarks/**/*.jsonl
 /_s*.mp4
 /benchmarks/**/*.mp4
 src/ava.egg-info/
+build/
+
+# Packaged acceptance gate: isolated venv is rebuilt by `make test-packaged`.
+.venv-packaged/

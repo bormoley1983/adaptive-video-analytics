@@ -70,6 +70,7 @@ pythonpath = ["src"]
 addopts = ["--strict-markers"]
 markers = [
     "integration: verifies collaboration between AVA components without a live deployment",
+    "packaged: acceptance tests for the installed (non-editable) package; run via make test-packaged, excluded from make test-integration",
     "e2e: verifies a complete user-visible workflow with production-like boundaries",
     "infra: verifies container, GPU, service, or deployment infrastructure",
 ]
