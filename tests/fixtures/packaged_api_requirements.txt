@@ -1,0 +1,41 @@
+# API-relevant dependencies for the packaged acceptance gate.
+#
+# Extracted from requirements.lock.txt (the exact locked stack).
+# Excludes heavy inference deps (torch, torchvision, ultralytics, opencv,
+# clip and their GPU transitive closure) which are not imported by the API
+# path. If the API dependency surface changes, regenerate by diffing the
+# pyproject dependencies against this file.
+
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.10.19
+charset-normalizer==3.5.2
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+prometheus_client==0.26.0
+pydantic==2.14.1
+pydantic_core==2.50.1
+PyYAML==6.0.3
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.8.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+psycopg-pool==3.3.3
+alembic==1.20.1
+SQLAlchemy==2.1.6
+Mako==1.4.3
+packaging==26.3
+python-dateutil==2.9.0.post0
+six==1.17.0
+fastapi==0.115.12
+starlette==0.46.2
+PyJWT==2.10.1
+cryptography==44.0.3
+authlib==1.6.12
+
+# Test dependencies (not in the lock; version ranges from pyproject dev extras).
+pytest>=8.0
+testcontainers[postgres]>=4.0
