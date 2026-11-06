@@ -128,14 +128,27 @@ separate step against the saved log.
 - Report exact commands and results. Unrun or unavailable is not passed. Mocked
   or CPU-only tests do not prove GPU, performance or infrastructure readiness.
 
-## Context and handoff
+## Task decomposition, checkpoints and handoff
 
+- Split large tasks into ordered, bounded deliverables with one observable
+  outcome each. Record dependencies, owned file scope, acceptance criteria,
+  validation gates, guardrails and unresolved decisions in the parent plan.
+  Do not add deliverables or infrastructure that active behavior does not need.
+- Keep one local `.md` checkpoint under `docs/dev-plan/` per deliverable. Before
+  implementation record its confirmed scope and exact next action; after each
+  gate update its status, exact commands and results, including failures, skips
+  and unavailable prerequisites. Unconfirmed choices stay explicitly open.
+- At a safe handoff record branch and committed base, changed and untracked
+  files, observable behavior, current gate status, limitations, requested private
+  document updates, persistent evidence/recovery-patch paths and the exact next
+  action. Keep secrets and private evidence out of Git. Verify the handoff can
+  be resumed without relying on chat history or disposable `/tmp` artifacts.
+- After each deliverable, finish its safe checkpoint, then compact context or
+  start a fresh session before beginning the next. Use a fresh session for a
+  materially different subtask. Never interrupt an unfinished edit, test or
+  merge to compact; if interrupted, record the incomplete state before resuming.
+  Context reset does not mean deleting project files, dependencies, caches,
+  evidence, worktrees or recovery artifacts.
 - Keep one bounded subtask per agent session. Do not start unrelated work.
-- Before clearing or compacting context, finish the current safe checkpoint and
-  record: branch/base, changed files, behavior, commands/results, limitations,
-  requested private-doc updates and the exact next action.
-- Use a fresh session for a materially different subtask. Compaction may follow
-  a durable checkpoint; it must not replace repository records or happen during
-  an unfinished edit, test or merge.
-- Update affected `README.md` files before completion. Update current progress
+  Update affected `README.md` files before completion. Update current progress
   and `docs/intro.md` only when handoff, milestone or repository settings change.
