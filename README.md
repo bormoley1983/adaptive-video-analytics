@@ -161,3 +161,16 @@ The separate local Keycloak and identity database stack is documented in
 [ops/README.md](ops/README.md#local-identity-provider).
 Readiness contributors may set `required = False` for optional dependencies;
 contributors default to required when the attribute is absent.
+
+## Event and camera reads (grant-scoped)
+
+When the app is constructed with both a grant repository and an event
+repository, three read endpoints and one admin write are enabled:
+`GET /api/v1/events` (cursor-paginated, stable global order),
+`GET /api/v1/events/{event_id}`, `GET /api/v1/cameras`, and the admin-only
+`PUT`/`DELETE /api/v1/grants/{camera_id}`. Access is grant-based: a caller
+sees a camera's history only while a current trusted grant covers their
+tenant and passes their site restriction; revocation removes access on the
+next read. Events are neutral — no tenant field, no local paths or RTSP
+URLs; evidence is reported as kind only. Missing, ungranted or
+site-invisible events return 404 without leaking existence.

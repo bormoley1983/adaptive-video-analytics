@@ -18,7 +18,7 @@ from datetime import datetime
 from psycopg import errors as pg_errors
 from psycopg_pool import ConnectionPool
 
-from ..events import EventRecord
+from ..events import EventRecord, EvidenceLocator
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,52 @@ _INSERT_OUTBOX_SQL = """
 INSERT INTO outbox (event_id, aggregate_type, payload)
 VALUES (%s, 'event', %s::jsonb)
 """
+
+_SELECT_EVENTS_SQL = """
+SELECT event_id, camera_id, session_id, track_id, rule_id, rule_type,
+       class_label, confidence, source_time_s, emitted_utc, capture_utc,
+       time_basis, config_version, model_ref, schema_version, frame_index,
+       evidence_kind, payload
+FROM events
+ORDER BY emitted_utc DESC, event_id DESC
+"""
+
+_SELECT_EVENT_SQL = """
+SELECT event_id, camera_id, session_id, track_id, rule_id, rule_type,
+       class_label, confidence, source_time_s, emitted_utc, capture_utc,
+       time_basis, config_version, model_ref, schema_version, frame_index,
+       evidence_kind, payload
+FROM events
+WHERE event_id = %s
+"""
+
+
+def _row_to_record(row: tuple) -> EventRecord:
+    """Convert an events row (evidence_path intentionally excluded) to a record.
+
+    The local evidence path is never read back into the canonical record on
+    the read side — the API exposes only sanitized evidence metadata (D3).
+    """
+    return EventRecord(
+        schema_version=row[14],
+        event_id=row[0],
+        camera_id=row[1],
+        session_id=row[2],
+        track_id=row[3],
+        rule_id=row[4],
+        rule_type=row[5],
+        class_label=row[6],
+        confidence=row[7],
+        source_time_s=row[8],
+        emitted_utc=row[9].isoformat() if hasattr(row[9], "isoformat") else str(row[9]),
+        config_version=row[12],
+        model_ref=row[13],
+        evidence=EvidenceLocator(kind=row[16]),
+        frame_index=row[15],
+        capture_utc=row[10].isoformat() if row[10] is not None and hasattr(row[10], "isoformat") else (str(row[10]) if row[10] is not None else None),
+        time_basis=row[11],
+        payload=row[17] if isinstance(row[17], dict) else {},
+    )
 
 
 def _parse_utc(value: str | None) -> datetime | None:
@@ -77,7 +123,7 @@ class PostgresEventSink:
             raise
         self._pool = pool
 
-    EXPECTED_REVISION = "0001"
+    EXPECTED_REVISION = "0002"
 
     def check_connection(self) -> None:
         """Verify a database connection is available."""
@@ -150,6 +196,18 @@ class PostgresEventSink:
                 })),
             )
         return True
+
+    def find_by_event_id(self, event_id: str) -> EventRecord | None:
+        """Return the canonical record for *event_id*, or None (read side)."""
+        with self._pool.connection() as conn:
+            row = conn.execute(_SELECT_EVENT_SQL, (event_id,)).fetchone()
+        return _row_to_record(row) if row is not None else None
+
+    def list_all(self) -> list[EventRecord]:
+        """Return all stored records (read side); scoping happens upstream."""
+        with self._pool.connection() as conn:
+            rows = conn.execute(_SELECT_EVENTS_SQL).fetchall()
+        return [_row_to_record(r) for r in rows]
 
     def has_event(self, event_id: str) -> bool:
         """Return True if an event with this ID already exists in the DB."""
