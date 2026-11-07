@@ -6,12 +6,9 @@ Run this on `ai-host1` from the workspace root:
 cd /home/admaccess/adaptive-video-analytics
 ```
 
-Everything below is copy-paste. Each section is independent — you can run just the
-parts you want. Expected outputs are given so you can confirm a clean reproduction.
+Everything below is copy-paste. Each section is independent — you can run just the parts you want. Expected outputs are given so you can confirm a clean reproduction.
 
-> **Scope note:** this reproduces the functional PoC baseline (one clip, two
-> detector paths, offline batch). It is not a live-latency or detection-quality
-> test. See `report.md` for the measured numbers and interpretation.
+> **Scope note:** this reproduces the functional PoC baseline (one clip, two detector paths, offline batch). It is not a live-latency or detection-quality test. See `report.md` for the measured numbers and interpretation.
 
 ---
 
@@ -57,10 +54,7 @@ If any hash differs, stop and re-stage the asset before continuing.
 docker compose build
 ```
 
-Expected: builds `ava/e1:local` from `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04`.
-If you already built it and haven't changed `src/`, `Dockerfile`, or `pyproject.toml`,
-you can skip this — but rebuild after any code change so the timing instrumentation
-is present.
+Expected: builds `ava/e1:local` from `nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04`. If you already built it and haven't changed `src/`, `Dockerfile`, or `pyproject.toml`, you can skip this — but rebuild after any code change so the timing instrumentation is present.
 
 Confirm the image exists:
 
@@ -78,8 +72,7 @@ docker compose run --rm ava run --config /configs/run-conventional.yaml \
 echo "EXIT=$?"
 ```
 
-Expected: `EXIT=0`. The command prints a JSON summary to stdout (after a short
-Ultralytics settings banner). Key fields to check in the JSON:
+Expected: `EXIT=0`. The command prints a JSON summary to stdout (after a short Ultralytics settings banner). Key fields to check in the JSON:
 
 - `"frames": 1768`
 - `"detections": 16811`
@@ -138,17 +131,13 @@ ls -la results/prompted/
 wc -l results/prompted/detections.jsonl   # expect 1768 lines
 ```
 
-> **Note on the "bag" class:** the prompted run may report a `bag` class (ID 5)
-> beyond the 5 configured text prompts. This is YOLOE-26s-seg's segmentation head
-> emitting an extra class — expected observed behavior, not an error. See
-> `report.md` → "Decisions and findings".
+> **Note on the "bag" class:** the prompted run may report a `bag` class (ID 5) beyond the 5 configured text prompts. This is YOLOE-26s-seg's segmentation head emitting an extra class — expected observed behavior, not an error. See `report.md` → "Decisions and findings".
 
 ---
 
 ## 4. Reproducibility check (run each path a second time)
 
-A clean reproduction means a second run of each path succeeds with **0 downloads**
-and the **same detection counts**. Run both again:
+A clean reproduction means a second run of each path succeeds with **0 downloads** and the **same detection counts**. Run both again:
 
 ```bash
 docker compose run --rm ava run --config /configs/run-conventional.yaml \
@@ -169,16 +158,13 @@ grep -o '"detections": [0-9]*' /tmp/repro-prompted.log
 grep -o '"detections": [0-9]*' /tmp/repro-prompted-2.log
 ```
 
-Expected: conventional `16811` both times, prompted `16192` both times. Wall-clock
-may vary by <1 s between runs (GPU scheduling/thermal) — that is normal.
+Expected: conventional `16811` both times, prompted `16192` both times. Wall-clock may vary by <1 s between runs (GPU scheduling/thermal) — that is normal.
 
 ---
 
 ## 5. Run the test suite
 
-The container image does **not** include pytest, so run the tests on the host with a
-throwaway venv. `ava.detector` defers its heavy imports, so only pydantic + PyYAML
-are needed.
+The container image does **not** include pytest, so run the tests on the host with a throwaway venv. `ava.detector` defers its heavy imports, so only pydantic + PyYAML are needed.
 
 ```bash
 python3 -m venv /tmp/ava-test-venv

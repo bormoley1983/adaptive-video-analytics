@@ -4,22 +4,11 @@ Status: **All four T1 gates complete; verdict GO with conditions.** Awaiting own
 
 ## Current result — 2026-10-24
 
-The conventional YOLO26n pipeline now decodes the complete crosswalk clip,
-runs TensorRT inference and reaches EOS with exit 0. It produces 1,768 JSONL
-frame records and 16,848 detections. This is 319 more (+1.93%) than the
-documented E-2 total of 16,529 detections. This is a directional count comparison,
-not an accuracy pass: there is no labelled matching analysis or agreed tolerance.
+The conventional YOLO26n pipeline now decodes the complete crosswalk clip, runs TensorRT inference and reaches EOS with exit 0. It produces 1,768 JSONL frame records and 16,848 detections. This is 319 more (+1.93%) than the documented E-2 total of 16,529 detections. This is a directional count comparison, not an accuracy pass: there is no labelled matching analysis or agreed tolerance.
 
-The observed stall depends on container device exposure. With GPU 0 alone
-exposed, CUDA initializes but NVDEC returns `CUDA_ERROR_NO_DEVICE` (100).
-With both device nodes exposed and CUDA pinned to GPU 0's UUID, NVDEC initializes,
-hardware decoding reaches EOS and the corrected app succeeds. The owner explicitly
-approved this temporary experiment. Broader device exposure weakens the device
-access boundary; it is an experimental workaround, not a permanent deployment
-or GPU-isolation decision. The internal driver mechanism remains unknown.
+The observed stall depends on container device exposure. With GPU 0 alone exposed, CUDA initializes but NVDEC returns `CUDA_ERROR_NO_DEVICE` (100). With both device nodes exposed and CUDA pinned to GPU 0's UUID, NVDEC initializes, hardware decoding reaches EOS and the corrected app succeeds. The owner explicitly approved this temporary experiment. Broader device exposure weakens the device access boundary; it is an experimental workaround, not a permanent deployment or GPU-isolation decision. The internal driver mechanism remains unknown.
 
-YOLOE export/profile-change behavior, accuracy approval and capacity remain open.
-No migration or production-readiness approval is implied.
+YOLOE export/profile-change behavior, accuracy approval and capacity remain open. No migration or production-readiness approval is implied.
 
 ## Reproducibility manifest
 
@@ -42,10 +31,7 @@ No migration or production-readiness approval is implied.
 | GPU access | Approved `--gpus all`; `CUDA_VISIBLE_DEVICES=GPU-facd1ddc-c4ab-7ac9-0000-ead909e0ec42`; decoder/mux/infer plugin IDs 0 |
 | Other workloads | ComfyUI on GPU 0; llama-server on GPU 1, retained |
 
-The engine/export tensor contract is inherited from the handoff: float
-`(1,84,8400)`. The parser remains specific to that contract; arbitrary tensor
-shape/type rejection is not implemented. The run verifies this supplied artifact,
-not arbitrary exports.
+The engine/export tensor contract is inherited from the handoff: float `(1,84,8400)`. The parser remains specific to that contract; arbitrary tensor shape/type rejection is not implemented. The run verifies this supplied artifact, not arbitrary exports.
 
 ## Results and comparison
 
@@ -64,9 +50,7 @@ not arbitrary exports.
 | Pipeline FPS / synchronized inference latency / warm-up | Not measured in this run; the app completed before its first periodic performance report |
 | Raw-record validation | Valid JSON, contiguous sequence, class IDs 0–79, finite values, confidence ≥0.35, positive boxes bounded by the 640 model space |
 
-The parser JSONL sequence is invocation order, not source PTS. Its boxes are in
-model coordinates before DeepStream's source-coordinate metadata processing.
-Do not use this output as a source-coordinate tracking/event contract.
+The parser JSONL sequence is invocation order, not source PTS. Its boxes are in model coordinates before DeepStream's source-coordinate metadata processing. Do not use this output as a source-coordinate tracking/event contract.
 
 ### Class distribution
 
@@ -88,12 +72,7 @@ Do not use this output as a source-coordinate tracking/event contract.
 | chair | 3 |
 | cell phone | 6 |
 
-The current local `results/e2-rules/detections.jsonl` contains 16,811 detections
-and zero non-null track IDs. It is not the historical 16,529-detection/267-track
-artifact described in the E-2 report, so its class counts were not presented as
-that baseline. Reconstruct or recover the original baseline before per-class or
-per-box parity approval. Differences in preprocessing, precision, tracking,
-class selection and postprocessing prevent a count delta from proving accuracy.
+The current local `results/e2-rules/detections.jsonl` contains 16,811 detections and zero non-null track IDs. It is not the historical 16,529-detection/267-track artifact described in the E-2 report, so its class counts were not presented as that baseline. Reconstruct or recover the original baseline before per-class or per-box parity approval. Differences in preprocessing, precision, tracking, class selection and postprocessing prevent a count delta from proving accuracy.
 
 ## Device-exposure diagnosis
 
@@ -104,34 +83,17 @@ The identical typed `probe_nvdec.py` ran without footage:
 | `--gpus device=0` | GPU 0 UUID | 1 | `CUDA_ERROR_NO_DEVICE` (100) | 1 |
 | `--gpus all` | GPU 0 UUID | 1 | `CUDA_SUCCESS` (0) | 0 |
 
-The approved decoder follow-up, with the same CUDA UUID and broader exposure,
-completed the full clip. The approved 120-second app follow-up also completed.
-A post-run allocation check found only the pre-existing ComfyUI process on GPU 0
-and llama-server on GPU 1; the sample was taken after the short app had exited,
-so it is not continuous GPU-isolation or utilization evidence.
+The approved decoder follow-up, with the same CUDA UUID and broader exposure, completed the full clip. The approved 120-second app follow-up also completed. A post-run allocation check found only the pre-existing ComfyUI process on GPU 0 and llama-server on GPU 1; the sample was taken after the short app had exited, so it is not continuous GPU-isolation or utilization evidence.
 
-Earlier decoder-only crosswalk (20-second bound) and NVIDIA bundled 720p sample
-(10-second bound) runs, with GPU 0 alone exposed, both exited 124 in preroll.
-Buffer-pool logging shows the first compressed packet queued and input streaming
-started without decoded output. CUDA/NVDEC libraries and video capabilities were
-present. No Xid appeared in the inspected kernel boot records.
+Earlier decoder-only crosswalk (20-second bound) and NVIDIA bundled 720p sample (10-second bound) runs, with GPU 0 alone exposed, both exited 124 in preroll. Buffer-pool logging shows the first compressed packet queued and input streaming started without decoded output. CUDA/NVDEC libraries and video capabilities were present. No Xid appeared in the inspected kernel boot records.
 
-NVIDIA's [troubleshooting guide](https://docs.nvidia.com/deepstream/9.2/text/DS_troubleshooting)
-requires `nvstreammux` for normal DeepStream inference. The abandoned no-mux
-route is not the final solution. A [report on NVIDIA's forum](https://forums.developer.nvidia.com/t/cuvidgetdecodercaps-decodecaps-returned-cuda-error-no-device-code-100/349517)
-describes similar per-device-exposure behavior; this provides context, not proof
-of the internal cause on this host. The successful final pipeline uses the
-SDK-supported app schema and muxing.
+NVIDIA's [troubleshooting guide](https://docs.nvidia.com/deepstream/9.2/text/DS_troubleshooting) requires `nvstreammux` for normal DeepStream inference. The abandoned no-mux route is not the final solution. A [report on NVIDIA's forum](https://forums.developer.nvidia.com/t/cuvidgetdecodercaps-decodecaps-returned-cuda-error-no-device-code-100/349517) describes similar per-device-exposure behavior; this provides context, not proof of the internal cause on this host. The successful final pipeline uses the SDK-supported app schema and muxing.
 
-Historical stock ResNet18 decode/inference evidence from 2026-10-22 remains
-partial compatibility evidence. The original `t1-headless-one-stream.txt`
-incorrectly points `model-engine-file` at ONNX and is retained as an invalid,
-inconclusive diagnostic attempt; it is not the current runnable configuration.
+Historical stock ResNet18 decode/inference evidence from 2026-10-22 remains partial compatibility evidence. The original `t1-headless-one-stream.txt` incorrectly points `model-engine-file` at ONNX and is retained as an invalid, inconclusive diagnostic attempt; it is not the current runnable configuration.
 
 ## Commands and local evidence
 
-[README.md](README.md) lists the mount contract. The two approved run commands
-inside the pinned container were:
+[README.md](README.md) lists the mount contract. The two approved run commands inside the pinned container were:
 
 ```bash
 timeout -k 3s 20s gst-launch-1.0 -e -v \
@@ -141,20 +103,11 @@ timeout -k 3s 20s gst-launch-1.0 -e -v \
 timeout -k 5s 120s /tmp/run_yolo26n_one_stream.sh
 ```
 
-Successful detections and complete app log:
-`/tmp/e3-t1-yolo26n.gmTW5U/detections.jsonl` and
-`/tmp/e3-t1-yolo26n.gmTW5U/pipeline.log`.
-Their SHA-256 values are
-`a27e6d54c970aa77b42d4c9460e9f31b21eb423ea79c90e658fb65de1f667785`
-and `0ff09cf229a25d3ac3a6515df9b4fceebeeb7d2b57ca7b89d0a947e31c1bf5e3`.
+Successful detections and complete app log: `/tmp/e3-t1-yolo26n.gmTW5U/detections.jsonl` and `/tmp/e3-t1-yolo26n.gmTW5U/pipeline.log`. Their SHA-256 values are `a27e6d54c970aa77b42d4c9460e9f31b21eb423ea79c90e658fb65de1f667785` and `0ff09cf229a25d3ac3a6515df9b4fceebeeb7d2b57ca7b89d0a947e31c1bf5e3`.
 
 Other retained logs:
 
-The successful app output/log, decoder-success log, controlled probe logs,
-parser build/test log, exact runtime library and Python gate output have also
-been preserved under `results/e3-t1-handoff-2026-10-24/` in the task worktree.
-All eight archived files pass `sha256sum -c SHA256SUMS`. This archive is ignored
-by Git and survives `/tmp` cleanup; recover it before removing the worktree.
+The successful app output/log, decoder-success log, controlled probe logs, parser build/test log, exact runtime library and Python gate output have also been preserved under `results/e3-t1-handoff-2026-10-24/` in the task worktree. All eight archived files pass `sha256sum -c SHA256SUMS`. This archive is ignored by Git and survives `/tmp` cleanup; recover it before removing the worktree.
 
 - `/tmp/e3-t1-decode-all-visible.log`: successful decoder run.
 - `/tmp/e3-t1-nvdec-all-visible.log`, `/tmp/e3-t1-nvdec-single-visible.log`: controlled capability comparison.
@@ -162,12 +115,7 @@ by Git and survives `/tmp` cleanup; recover it before removing the worktree.
 - `/tmp/e3-t1-decoder-environment.log`: library and decoder inventory.
 - `/tmp/e3-t1-parser-tests.oQcJov/build.log`: parser build and eight passing deterministic contract tests.
 
-The parser build uses `build_parser.sh` in the pinned SDK image without GPU
-access. NVIDIA headers emit warnings under `-Wall -Wextra`; the initial
-`-Werror` attempt failed on those warnings. The tested rebuild is byte-identical
-to the successful-run library. Contract tests cover missing output, thresholds,
-class limits, NMS, coordinate mapping, right/bottom clipping, zero-area rejection,
-global top-K and JSONL append/empty-frame behavior.
+The parser build uses `build_parser.sh` in the pinned SDK image without GPU access. NVIDIA headers emit warnings under `-Wall -Wextra`; the initial `-Werror` attempt failed on those warnings. The tested rebuild is byte-identical to the successful-run library. Contract tests cover missing output, thresholds, class limits, NMS, coordinate mapping, right/bottom clipping, zero-area rejection, global top-K and JSONL append/empty-frame behavior.
 
 The repository gates ran through host make and the existing CPU-only dev image:
 
@@ -185,23 +133,9 @@ make -k 'PYTHON=docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -e PYTEST_ADDOPTS=-
 | `make test-coverage` | 260 passed, 7 deselected; 94.40% combined line/branch coverage |
 | `make lint` | Passed for src/tests |
 
-The aggregate make command exits 2 because the empty e2e selector exits 5;
-`-k` allowed the remaining independent gates to complete. Full evidence is
-`/tmp/e3-t1-make-gates.log`. Host pytest/Ruff and the earlier temporary venv were
-unavailable. The initial attempt to run make inside the dev image failed because
-that image has no make binary. Python source was not changed; this regression
-coverage does not measure the separate C++ parser or certify GPU performance.
-The new capability probe also passes a separate `ruff check --no-cache`
-invocation. Shell syntax, probe syntax, tracked whitespace and all ten new
-text-file whitespace checks pass. Synthetic parser JSONL parses as the expected
-empty frame followed by one detection. No named experiment containers remain.
+The aggregate make command exits 2 because the empty e2e selector exits 5; `-k` allowed the remaining independent gates to complete. Full evidence is `/tmp/e3-t1-make-gates.log`. Host pytest/Ruff and the earlier temporary venv were unavailable. The initial attempt to run make inside the dev image failed because that image has no make binary. Python source was not changed; this regression coverage does not measure the separate C++ parser or certify GPU performance. The new capability probe also passes a separate `ruff check --no-cache` invocation. Shell syntax, probe syntax, tracked whitespace and all ten new text-file whitespace checks pass. Synthetic parser JSONL parses as the expected empty frame followed by one detection. No named experiment containers remain.
 
-Host syscall attach was unavailable (`Operation not permitted`). Automatic
-approval review rejected a proposed third-party FFmpeg/footage comparison; it
-was not executed. No host driver, shared service or permanent GPU configuration
-was changed. Test containers were stopped or removed. Temporary evidence must
-be recovered before host cleanup; generated media/models/libraries/results stay
-outside Git.
+Host syscall attach was unavailable (`Operation not permitted`). Automatic approval review rejected a proposed third-party FFmpeg/footage comparison; it was not executed. No host driver, shared service or permanent GPU configuration was changed. Test containers were stopped or removed. Temporary evidence must be recovered before host cleanup; generated media/models/libraries/results stay outside Git.
 
 ## E-3-T1 gate status (2026-10-24)
 
@@ -212,48 +146,28 @@ outside Git.
 | 3 | YOLOE export + class-change behavior | **Done** | `gate3-yoloe-findings.md`; `t1-yoloe-detections.jsonl` (1768 frames) |
 | 4 | Device isolation policy + go/no-go | **Done** | `gate4-device-isolation-and-verdict.md`: GO with conditions |
 
-All four T1 gates are complete. The compatibility verdict is **GO — with
-conditions** (see Gate 4 document). Remaining open items for full T1 closure:
-owner sign-off on the directional accuracy comparison, and ADR-2 status update.
+All four T1 gates are complete. The compatibility verdict is **GO — with conditions** (see Gate 4 document). Remaining open items for full T1 closure: owner sign-off on the directional accuracy comparison, and ADR-2 status update.
 
-RTSP, NvDCF/rule/event parity, overload and 30-minute multi-stream capacity are
-not established by this conventional one-stream experiment.
+RTSP, NvDCF/rule/event parity, overload and 30-minute multi-stream capacity are not established by this conventional one-stream experiment.
 
 ---
 
 ## E-3-T5: measured single-GPU multi-stream capacity sweep
 
-Status: **Sweep complete (16/16 points ran to completion); no point meets the
-4 FPS/camera pass gate.** Capacity is therefore **provisional**, not a passing
-limit. The valid dominant finding is that the relative source-PTS pacing gate
-quantizes a 4 FPS request on a 10 FPS source to about 3.33 FPS. The recorded
-buffer-drop, queue-age and event-latency values are invalid because the original
-instrumentation did not measure those contracts. See
-[Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window);
-the parallel-investigation handoff lives in the private documentation tree
-(`docs/handoff-e3-t5-fps-cap.md`, not committed to this repository).
+Status: **Sweep complete (16/16 points ran to completion); no point meets the 4 FPS/camera pass gate.** Capacity is therefore **provisional**, not a passing limit. The valid dominant finding is that the relative source-PTS pacing gate quantizes a 4 FPS request on a 10 FPS source to about 3.33 FPS. The recorded buffer-drop, queue-age and event-latency values are invalid because the original instrumentation did not measure those contracts. See [Root cause of the sub-4 FPS window](#root-cause-of-the-sub-4-fps-window); the parallel-investigation handoff lives in the private documentation tree (`docs/handoff-e3-t5-fps-cap.md`, not committed to this repository).
 
 ## Scope and method
 
-- **Workload:** live multi-stream RTSP analytics on the T3 opencv/gstreamer
-  adapter (`src/ava/live_runner.py`), GPU 0 only (`CUDA_VISIBLE_DEVICES=0`).
-  GPU 1 (shared llama-server) was never touched.
-- **Points:** 4 / 16 / 25 / 50 cameras × {conventional, prompted} ×
-  {shared, per_camera} detector mode = **16 points**.
-- **Duration:** each point ran `duration_s: 2100` (35 min) steady-state after
-  warm-up, exceeding the 30-minute minimum in the E-3 completion gate.
-- **Footage:** 50 normalized H.264 clips (1280×720, 10 FPS source), looped by
-  FFmpeg publishers into MediaMTX; each camera consumed at its native ~10 FPS.
-- **Detector profiles:** conventional = YOLO26n + ByteTrack; prompted =
-  YOLOE-26s-seg + MobileCLIP text encoder (prompts: person, car, motorcycle).
-- **Bring-up:** `./harness/stack.sh up --no-ops` (self-healing, health-gated);
-  stream health confirmed with `./harness/probe.sh`.
+- **Workload:** live multi-stream RTSP analytics on the T3 opencv/gstreamer adapter (`src/ava/live_runner.py`), GPU 0 only (`CUDA_VISIBLE_DEVICES=0`). GPU 1 (shared llama-server) was never touched.
+- **Points:** 4 / 16 / 25 / 50 cameras × {conventional, prompted} × {shared, per_camera} detector mode = **16 points**.
+- **Duration:** each point ran `duration_s: 2100` (35 min) steady-state after warm-up, exceeding the 30-minute minimum in the E-3 completion gate.
+- **Footage:** 50 normalized H.264 clips (1280×720, 10 FPS source), looped by FFmpeg publishers into MediaMTX; each camera consumed at its native ~10 FPS.
+- **Detector profiles:** conventional = YOLO26n + ByteTrack; prompted = YOLOE-26s-seg + MobileCLIP text encoder (prompts: person, car, motorcycle).
+- **Bring-up:** `./harness/stack.sh up --no-ops` (self-healing, health-gated); stream health confirmed with `./harness/probe.sh`.
 
 ## Completion-gate verdict per point
 
-The E-3 completion gate for a *passing* capacity point requires, over the
-30-minute run: each camera sustains **≥ 4 analysis FPS**, primary-event p95
-latency **< 3 s** (excluding dwell), queues do not grow, and no worker crashes.
+The E-3 completion gate for a *passing* capacity point requires, over the 30-minute run: each camera sustains **≥ 4 analysis FPS**, primary-event p95 latency **< 3 s** (excluding dwell), queues do not grow, and no worker crashes.
 
 | Gate | Result across all 16 points |
 | --- | --- |
@@ -262,19 +176,11 @@ latency **< 3 s** (excluding dwell), queues do not grow, and no worker crashes.
 | Queues do not grow | **UNPROVEN.** The deque was an unconsumed history ring; depth and age did not represent processing backlog. |
 | No worker crashes | PASS — all 16 points reached EOS with exit 0. |
 
-**Highest passing point: none.** Every point is provisional because the FPS gate
-is unmet at every stream count. **First bottleneck:** per-camera analysis
-throughput capped near ~3.3 FPS by the relative PTS gate. GPU was not saturated
-under this throttled workload, but the sweep cannot establish remaining capacity.
+**Highest passing point: none.** Every point is provisional because the FPS gate is unmet at every stream count. **First bottleneck:** per-camera analysis throughput capped near ~3.3 FPS by the relative PTS gate. GPU was not saturated under this throttled workload, but the sweep cannot establish remaining capacity.
 
 ## Detailed per-point results
 
-All values are per-point aggregates over the 2100 s run. `afps min/avg` is the
-minimum and mean analyzed FPS across that point's cameras. `drop%`, `q_end` and
-`lat_p95s` are retained as historical raw outputs but are **invalid for capacity
-acceptance**: the old runner counted history-ring overwrites as drops, derived
-queue age from depth divided by target FPS, and recorded inference duration as
-event latency. GPU/CPU/RAM are host-sampler averages/peaks over the run.
+All values are per-point aggregates over the 2100 s run. `afps min/avg` is the minimum and mean analyzed FPS across that point's cameras. `drop%`, `q_end` and `lat_p95s` are retained as historical raw outputs but are **invalid for capacity acceptance**: the old runner counted history-ring overwrites as drops, derived queue age from depth divided by target FPS, and recorded inference duration as event latency. GPU/CPU/RAM are host-sampler averages/peaks over the run.
 
 | point | cams | kind | mode | wall_s | in_fps | afps min/avg | drop% | q_end | lat_p95s | evts | gpuU avg/peak% | gpuMemPeak MiB | decU% | load1m | ramAvail MiB | inferP95 ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -297,143 +203,64 @@ event latency. GPU/CPU/RAM are host-sampler averages/peaks over the run.
 
 ### Reading the table
 
-- **GPU did not saturate under this throttled workload.** Utilization averages
-  2.9%→63.9% and peaks at 78%; VRAM peaks at 11 GB (of 24 GB). This is evidence
-  of unused resources during these runs, not a capacity estimate.
-- **`decU%` (decoder util) reads 0.0** because the opencv/gstreamer adapter does
-  not expose a hardware-decoder utilization counter; this is a telemetry gap, not
-  evidence that decoding was idle. `in_fps` is the rate delivered from the
-  OpenCV capture to AVA; it does not count frames discarded inside the backend.
-- **`inferP95 ms` spikes at 50 cameras** (up to 345 ms) — the shared detector
-  lock serializes inference across all cameras, so per-call latency grows with
-  camera count. This is the first *real* scaling pressure visible in the data,
-  but it still does not push average FPS below ~2.9.
-- **shared vs per_camera:** near-identical analyzed FPS; per_camera uses more
-  VRAM (one model instance per camera) and shows higher GPU-util peaks. The
-  conventional shared mode also interleaves cameras through one persistent
-  ByteTrack instance, so its tracking output is not a valid cross-camera
-  correctness result.
+- **GPU did not saturate under this throttled workload.** Utilization averages 2.9%→63.9% and peaks at 78%; VRAM peaks at 11 GB (of 24 GB). This is evidence of unused resources during these runs, not a capacity estimate.
+- **`decU%` (decoder util) reads 0.0** because the opencv/gstreamer adapter does not expose a hardware-decoder utilization counter; this is a telemetry gap, not evidence that decoding was idle. `in_fps` is the rate delivered from the OpenCV capture to AVA; it does not count frames discarded inside the backend.
+- **`inferP95 ms` spikes at 50 cameras** (up to 345 ms) — the shared detector lock serializes inference across all cameras, so per-call latency grows with camera count. This is the first *real* scaling pressure visible in the data, but it still does not push average FPS below ~2.9.
+- **shared vs per_camera:** near-identical analyzed FPS; per_camera uses more VRAM (one model instance per camera) and shows higher GPU-util peaks. The conventional shared mode also interleaves cameras through one persistent ByteTrack instance, so its tracking output is not a valid cross-camera correctness result.
 
 ## Root cause of the sub-4 FPS window
 
-The measured analyzed FPS is *by construction* just under the configured
-`analysis_fps: 4.0`. The valid mechanism in the measured revision was:
+The measured analyzed FPS is *by construction* just under the configured `analysis_fps: 4.0`. The valid mechanism in the measured revision was:
 
 1. AVA receives frames from each OpenCV capture at approximately 10 FPS.
-2. **Inference is decimated to `analysis_fps`** using the *source PTS*: a frame
-   is inferred only when `frame.timestamp_s - last_infer_ts >= 1/analysis_fps`
-   (i.e. ≥ 0.25 s). This targets exactly 4 inferences/s per camera.
-3. Because the gate advances from the last selected frame, eligible timestamps
-   are `0.0, 0.3, 0.6, ...`, realizing approximately 3.33 FPS.
+2. **Inference is decimated to `analysis_fps`** using the *source PTS*: a frame is inferred only when `frame.timestamp_s - last_infer_ts >= 1/analysis_fps` (i.e. ≥ 0.25 s). This targets exactly 4 inferences/s per camera.
+3. Because the gate advances from the last selected frame, eligible timestamps are `0.0, 0.3, 0.6, ...`, realizing approximately 3.33 FPS.
 
-The deque did not participate in inference flow: frames were inferred directly
-from the decode loop, appended to the deque, and never removed. Once full, every
-append was counted as a drop. The reported ~50% was additionally calculated as
-`drops / (decoded + drops)` even though those drops were already a subset of
-decoded frames. Queue age was synthesized as `depth / analysis_fps`. Therefore
-the drop rate, queue depth and queue age cannot support any overload conclusion.
+The deque did not participate in inference flow: frames were inferred directly from the decode loop, appended to the deque, and never removed. Once full, every append was counted as a drop. The reported ~50% was additionally calculated as `drops / (decoded + drops)` even though those drops were already a subset of decoded frames. Queue age was synthesized as `depth / analysis_fps`. Therefore the drop rate, queue depth and queue age cannot support any overload conclusion.
 
-- Target inferences over 2100 s at 4.0 FPS = **8400**. Measured ≈ **6990**
-  (cam-01, 4/25-cam points) → a **~17% shortfall**, giving ~3.33 FPS.
-- The shortfall comes from PTS-based gating on a 10 FPS source: with frames
-  arriving every 0.1 s and a 0.25 s gate, the realized interval is quantized to
-  0.3 s (3 inferences per 0.9 s of source time) rather than exactly 0.25 s, plus
-  small warm-up/teardown loss at run boundaries. At 50 cameras the shortfall
-  widens (~21%) as decode rate dips to ~9.1–9.5 FPS under host load.
+- Target inferences over 2100 s at 4.0 FPS = **8400**. Measured ≈ **6990** (cam-01, 4/25-cam points) → a **~17% shortfall**, giving ~3.33 FPS.
+- The shortfall comes from PTS-based gating on a 10 FPS source: with frames arriving every 0.1 s and a 0.25 s gate, the realized interval is quantized to 0.3 s (3 inferences per 0.9 s of source time) rather than exactly 0.25 s, plus small warm-up/teardown loss at run boundaries. At 50 cameras the shortfall widens (~21%) as decode rate dips to ~9.1–9.5 FPS under host load.
 
-**Consequence for the capacity claim:** the sweep measured a throughput ceiling
-imposed by the relative PTS gate, not the true GPU/host capacity limit. Raising
-the old deque size cannot change throughput and would only retain more decoded
-BGR frames. A valid follow-up requires an absolute cadence, a real bounded
-producer/consumer queue, timestamp-derived queue age and ingest-to-event latency.
+**Consequence for the capacity claim:** the sweep measured a throughput ceiling imposed by the relative PTS gate, not the true GPU/host capacity limit. Raising the old deque size cannot change throughput and would only retain more decoded BGR frames. A valid follow-up requires an absolute cadence, a real bounded producer/consumer queue, timestamp-derived queue age and ingest-to-event latency.
 
 ## Flow-correction diagnostics (2026-10-25)
 
-ADR-17 was implemented in the Python reference runner: each camera now has a
-decode producer and bounded drop-oldest processing queue, analysis uses an
-absolute source-time cadence, and per-camera FPS excludes connection startup by
-measuring from the first decoded frame through processing completion. Event
-latency is monotonic enqueue-to-persistence time.
+ADR-17 was implemented in the Python reference runner: each camera now has a decode producer and bounded drop-oldest processing queue, analysis uses an absolute source-time cadence, and per-camera FPS excludes connection startup by measuring from the first decoded frame through processing completion. Event latency is monotonic enqueue-to-persistence time.
 
-Two GPU-0-only conventional/per-camera diagnostics used four existing 10 FPS
-RTSP sources for 120 seconds each. These short runs validate the corrected flow
-contracts; they do not replace ADR-6's long-duration capacity gate. The earlier
-35-minute sweep remains stability evidence, but capacity stays provisional.
+Two GPU-0-only conventional/per-camera diagnostics used four existing 10 FPS RTSP sources for 120 seconds each. These short runs validate the corrected flow contracts; they do not replace ADR-6's long-duration capacity gate. The earlier 35-minute sweep remains stability evidence, but capacity stays provisional.
 
 | target | analyzed FPS range | input FPS range | drops | max queue/age | inference p95 | event p95 where emitted | GPU util avg/peak |
 | --- | --- | --- | ---: | --- | --- | --- | --- |
 | 4 FPS | 4.042–4.043 | 10.099–10.113 | 0 | 0 / 0 s | 6.84–7.19 ms | 6.83 ms | 2.96% / 9% |
 | 10 FPS | 10.103–10.112 | 10.103–10.112 | 0 | 0 / 0 s | 6.55–8.14 ms | 7.91 ms | 9.67% / 36% |
 
-Both runs completed without reconnects or worker errors. Deterministic worker
-tests also cover 25 and 50 FPS sources; a target above source FPS selects every
-available frame rather than inventing frames. Live 25/50 FPS claims require
-declared sources at least that fast.
+Both runs completed without reconnects or worker errors. Deterministic worker tests also cover 25 and 50 FPS sources; a target above source FPS selects every available frame rather than inventing frames. Live 25/50 FPS claims require declared sources at least that fast.
 
-A 300-second conventional/per-camera diagnostic then requested 10 FPS from all
-50 cameras (500 FPS aggregate target). It did **not** remain real-time: analyzed
-throughput averaged 4.20 FPS/camera (2.99–5.93 range), all 50 queues reached the
-40-frame limit, and 51,265 of 96,628 decoded frames were dropped by the bounded
-drop-oldest policy. At shutdown, queue depth averaged 39.92 and oldest-frame age
-averaged 3.94 s (4.00 s maximum). The bounded queue therefore prevented
-unbounded latency, but the point failed both throughput and no-drop acceptance.
-Inference p95 averaged 338.84 ms/camera (321.80–353.21 ms).
+A 300-second conventional/per-camera diagnostic then requested 10 FPS from all 50 cameras (500 FPS aggregate target). It did **not** remain real-time: analyzed throughput averaged 4.20 FPS/camera (2.99–5.93 range), all 50 queues reached the 40-frame limit, and 51,265 of 96,628 decoded frames were dropped by the bounded drop-oldest policy. At shutdown, queue depth averaged 39.92 and oldest-frame age averaged 3.94 s (4.00 s maximum). The bounded queue therefore prevented unbounded latency, but the point failed both throughput and no-drop acceptance. Inference p95 averaged 338.84 ms/camera (321.80–353.21 ms).
 
-GPU 0 averaged 33.77% utilization, peaked at 50%, and used at most 5,397 MiB,
-so GPU compute and VRAM were not saturated. Host load reached 7.92 and available
-RAM fell to 4,289 MiB. Camera initialization was staggered: measurement windows
-ranged from 88.25 to 295.10 seconds, so this short run is diagnostic evidence,
-not a stable five-minute all-cameras-active capacity result. Repeated H.264
-reference-picture warnings produced no recorded reconnects or worker errors.
+GPU 0 averaged 33.77% utilization, peaked at 50%, and used at most 5,397 MiB, so GPU compute and VRAM were not saturated. Host load reached 7.92 and available RAM fell to 4,289 MiB. Camera initialization was staggered: measurement windows ranged from 88.25 to 295.10 seconds, so this short run is diagnostic evidence, not a stable five-minute all-cameras-active capacity result. Repeated H.264 reference-picture warnings produced no recorded reconnects or worker errors.
 
-Isolated image:
-`ava/e3-flow-fix@sha256:fddd2b3b03419db6c8a94a9905ce1407697814aa1b544854c3561aad9d9c2106`.
-Ignored metric evidence:
+Isolated image: `ava/e3-flow-fix@sha256:fddd2b3b03419db6c8a94a9905ce1407697814aa1b544854c3561aad9d9c2106`. Ignored metric evidence:
 
-- 4 FPS `metrics.json` SHA-256:
-  `a445a82c25da30c0bdcba1a88c89df36b9c2cfbdb1a03620867e58285ec2a897`
-- 10 FPS `metrics.json` SHA-256:
-  `0fa17c2cea371ad2f7f203b33df82772a360e5f0ee1c421ffe5bb3b54cfa8581`
-- 50-camera / 10 FPS / 300 s `metrics.json` SHA-256:
-  `d59a48f4161acfeeddb6e33c7c3ee5b4025e838bf84f2c154f2d193073e430a6`
-- 50-camera / 10 FPS / 300 s `run.log` SHA-256:
-  `70353b12dd452fecdae5278b630bb194900e665bc4bf31efa67612a6d6d6de0f`
+- 4 FPS `metrics.json` SHA-256: `a445a82c25da30c0bdcba1a88c89df36b9c2cfbdb1a03620867e58285ec2a897`
+- 10 FPS `metrics.json` SHA-256: `0fa17c2cea371ad2f7f203b33df82772a360e5f0ee1c421ffe5bb3b54cfa8581`
+- 50-camera / 10 FPS / 300 s `metrics.json` SHA-256: `d59a48f4161acfeeddb6e33c7c3ee5b4025e838bf84f2c154f2d193073e430a6`
+- 50-camera / 10 FPS / 300 s `run.log` SHA-256: `70353b12dd452fecdae5278b630bb194900e665bc4bf31efa67612a6d6d6de0f`
 
-Conventional shared-detector mode still reuses persistent ByteTrack state
-across cameras. The runner emits an explicit warning, and this mode remains
-excluded from cross-camera correctness claims until tracker state is isolated.
+Conventional shared-detector mode still reuses persistent ByteTrack state across cameras. The runner emits an explicit warning, and this mode remains excluded from cross-camera correctness claims until tracker state is isolated.
 
 ## Observability-stack overhead
 
-The ops stack (Prometheus v3.15.1, Grafana v13.2.4, Loki v3.7.9, Alloy v1.21.2)
-ran alongside the sweep on CPU only. Per B-022's measured baseline the full ops
-project costs **~486 MiB RAM and < 2% CPU** at idle; during the sweep the host
-`load1m` rose from ~0.5 (4 cams) to ~5.0 (50 cams), dominated by the analytics
-workers, not the observability stack. The per-point `ramAvail` decline
-(9344 → 2401 MiB at 50-conv-shared) tracks camera count. The old runner retained
-40 full BGR frames per camera in an unconsumed history ring, which materially
-contributed to memory use; the exact share was not isolated.
+The ops stack (Prometheus v3.15.1, Grafana v13.2.4, Loki v3.7.9, Alloy v1.21.2) ran alongside the sweep on CPU only. Per B-022's measured baseline the full ops project costs **~486 MiB RAM and < 2% CPU** at idle; during the sweep the host `load1m` rose from ~0.5 (4 cams) to ~5.0 (50 cams), dominated by the analytics workers, not the observability stack. The per-point `ramAvail` decline (9344 → 2401 MiB at 50-conv-shared) tracks camera count. The old runner retained 40 full BGR frames per camera in an unconsumed history ring, which materially contributed to memory use; the exact share was not isolated.
 
 ## Quality comparison with E-2
 
-E-2 (`benchmarks/e-2/report.md`) is a **functional** baseline, not an accuracy
-certification: 16,529 detections / 267 tracks over the single E-1 crosswalk clip
-(1768 frames @ 59.94 FPS), with one null track_id (0.01%). The T5 sweep is a
-*capacity* measurement over looped 720p/10 FPS clips and does **not** reproduce
-E-2's detection/tracking counts, so no per-class or per-box parity is claimed.
-Directionally:
+E-2 (`benchmarks/e-2/report.md`) is a **functional** baseline, not an accuracy certification: 16,529 detections / 267 tracks over the single E-1 crosswalk clip (1768 frames @ 59.94 FPS), with one null track_id (0.01%). The T5 sweep is a *capacity* measurement over looped 720p/10 FPS clips and does **not** reproduce E-2's detection/tracking counts, so no per-class or per-box parity is claimed. Directionally:
 
-- Conventional T5 points emitted events only where the rule geometry matched the
-  looped footage (e.g. 73 events at 50-conv-shared); most prompted points emitted
-  0 because the prompts/geometry did not trigger on the normalized clips. Event
-  counts here are a liveness signal, not a quality metric.
-- The T1 DeepStream run produced 16,848 detections (+319 / +1.93% vs E-2's
-  16,529) — a directional count delta only, with no labelled ground truth for
-  absolute accuracy. That comparison is unchanged by T5.
+- Conventional T5 points emitted events only where the rule geometry matched the looped footage (e.g. 73 events at 50-conv-shared); most prompted points emitted 0 because the prompts/geometry did not trigger on the normalized clips. Event counts here are a liveness signal, not a quality metric.
+- The T1 DeepStream run produced 16,848 detections (+319 / +1.93% vs E-2's 16,529) — a directional count delta only, with no labelled ground truth for absolute accuracy. That comparison is unchanged by T5.
 
-A true quality comparison (detection/tracking parity between the live opencv
-adapter and the E-2 offline pipeline) remains open and is out of scope for this
-capacity sweep.
+A true quality comparison (detection/tracking parity between the live opencv adapter and the E-2 offline pipeline) remains open and is out of scope for this capacity sweep.
 
 ## Reproducibility
 
@@ -458,7 +285,4 @@ capacity sweep.
 | 4 | Report observability-stack overhead | **Done** — ~486 MiB / <2% CPU (B-022 baseline) | Overhead section |
 | 5 | Quality comparison with E-2 | **Directional only** — no parity claimed | Quality section |
 
-The corrected cadence, queue, latency and drop contracts now have deterministic
-coverage and short 4/10 FPS live proof. Open: run a new declared stable-capacity
-sweep and resolve conventional shared-mode tracker isolation before any final
-cross-camera capacity/quality claim (see handoff).
+The corrected cadence, queue, latency and drop contracts now have deterministic coverage and short 4/10 FPS live proof. Open: run a new declared stable-capacity sweep and resolve conventional shared-mode tracker isolation before any final cross-camera capacity/quality claim (see handoff).

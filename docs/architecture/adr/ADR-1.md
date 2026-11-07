@@ -22,14 +22,7 @@ Snapshot: 2026-10-19 22:17:15, as supplied by the owner; not independently probe
 
 RTX **30-series is the minimum hardware baseline** for this project, not the long-term hardware ceiling. The dual RTX 3090 system is the reference development/benchmark host; keep newer NVIDIA GPUs in scope and benchmark them under their own manifests. Series membership alone does not guarantee a model fits: VRAM, decoder features and measured capacity remain device-specific. Each reference GPU has its own 24 GB budget.
 
-The current operating topology assigns one RTX 3090 to the continuously running
-local-AI service and shares the other among AVA and other projects. The local-AI
-path is LiteLLM → Qwen3.8 Dense 27B (144k context) → llama.cpp. Device ordinals,
-process IDs and memory use above remain snapshot facts, not permanent identity.
-Every AVA run checks UUID, allocation and competing load. Both GPUs may be
-temporarily configured for an explicitly approved test, but separate VRAM is
-never treated as a pooled 48 GB budget and running workloads are never stopped
-implicitly.
+The current operating topology assigns one RTX 3090 to the continuously running local-AI service and shares the other among AVA and other projects. The local-AI path is LiteLLM → Qwen3.8 Dense 27B (144k context) → llama.cpp. Device ordinals, process IDs and memory use above remain snapshot facts, not permanent identity. Every AVA run checks UUID, allocation and competing load. Both GPUs may be temporarily configured for an explicitly approved test, but separate VRAM is never treated as a pooled 48 GB budget and running workloads are never stopped implicitly.
 
 ### Current stable stack policy
 
@@ -51,15 +44,8 @@ No database, broker, web framework, Kubernetes, training stack or generative mod
 
 ## Validation and revisit
 
-E-1 reproduced both detector paths on GPU 0 of `ai-host1` using the CUDA
-container, Python 3.12.3, torch 2.14.1+cu130 and Ultralytics 8.4.183. Both
-documented runs completed twice without first-use downloads; measured evidence
-is in `benchmarks/e-1/report.md`. E-2 configuration and deterministic rules are
-implemented, while its evidence and quality gates remain open.
+E-1 reproduced both detector paths on GPU 0 of `ai-host1` using the CUDA container, Python 3.12.3, torch 2.14.1+cu130 and Ultralytics 8.4.183. Both documented runs completed twice without first-use downloads; measured evidence is in `benchmarks/e-1/report.md`. E-2 configuration and deterministic rules are implemented, while its evidence and quality gates remain open.
 
-The installed versions are recorded, but the build still uses dependency ranges
-and an unpinned Git dependency; B-016 tracks the missing reproducible lock.
-Revisit interpreter choices on compatibility failure and the backend when E-3
-measures the Python limit.
+The installed versions are recorded, but the build still uses dependency ranges and an unpinned Git dependency; B-016 tracks the missing reproducible lock. Revisit interpreter choices on compatibility failure and the backend when E-3 measures the Python limit.
 
 References checked 2026-10-19: [PyTorch stable installation guidance](https://pytorch.org/get-started/locally/), [NVIDIA CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/), Ultralytics [tracking integration](https://docs.ultralytics.com/modes/track/) and [YOLOE](https://docs.ultralytics.com/models/yoloe/). The measured environment is a tested baseline, not yet a locked dependency resolution.

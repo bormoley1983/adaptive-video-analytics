@@ -25,23 +25,13 @@ ADRs describe a decision, its alternatives, consequences, validation, and revisi
 
 ## Stack at a glance
 
-The active and target stack is described in [STACK.md](../../STACK.md) (root of
-the repository). This section keeps only what the ADRs add: the initial E-1/E-2
-baseline was a small Python CLI with PyTorch/Ultralytics detection, ByteTrack
-tracking, JSONL events and annotated-MP4 output; the target implementation moves
-to DeepStream/GStreamer NVDEC decode, TensorRT inference, NvDCF tracking,
-PostgreSQL/outbox event storage and a modular monolith behind hexagonal ports.
-Proposed rows remain proposed until their owning epic gate accepts or revises
-them.
+The active and target stack is described in [STACK.md](../../STACK.md) (root of the repository). This section keeps only what the ADRs add: the initial E-1/E-2 baseline was a small Python CLI with PyTorch/Ultralytics detection, ByteTrack tracking, JSONL events and annotated-MP4 output; the target implementation moves to DeepStream/GStreamer NVDEC decode, TensorRT inference, NvDCF tracking, PostgreSQL/outbox event storage and a modular monolith behind hexagonal ports. Proposed rows remain proposed until their owning epic gate accepts or revises them.
 
 This is the recommended fit for the stated hardware and delivery order, not an unconditional final stack. Apply [ADR-1](adr/ADR-1.md)'s latest mutually compatible stable policy to every component; an older version requires a documented reason. Accept or revise proposed ADRs at the owning epic gate. The original ideas document is historical input, not the authoritative version recommendation.
 
 ## C4 diagrams
 
-The first three views describe the implemented offline PoC. Views four through
-six are proposals constrained by ADR-2/5/8/9/14/15/16/18 and must not be read
-as deployed state. They extend the existing E-series runtime/integration plan
-with the F-series API and X-series UI work; they do not cancel those milestones.
+The first three views describe the implemented offline PoC. Views four through six are proposals constrained by ADR-2/5/8/9/14/15/16/18 and must not be read as deployed state. They extend the existing E-series runtime/integration plan with the F-series API and X-series UI work; they do not cancel those milestones.
 
 - [System context](diagrams/01-system-context.puml)
 - [Current containers](diagrams/02-current-containers.puml)
@@ -50,8 +40,7 @@ with the F-series API and X-series UI work; they do not cancel those milestones.
 - [Future modular-monolith layers and hexagonal adapters](diagrams/05-future-api-components.puml)
 - [Proposed live batched-inference components](diagrams/06-live-batch-components.puml)
 
-The files use the C4-PlantUML standard-library includes (`<C4/...>`). Rendering
-requires a PlantUML distribution that contains that standard library.
+The files use the C4-PlantUML standard-library includes (`<C4/...>`). Rendering requires a PlantUML distribution that contains that standard library.
 
 ## Change procedure
 
