@@ -15,8 +15,8 @@ Applies to every model and client (Qwen single-agent sessions and Codex multi-ag
 ## Mandatory human gates
 
 - The plan-confirmation gate above applies to every task, including delegated and parallel work. If scope or assumptions materially change, repeat the QA and obtain confirmation of the revised plan before continuing.
-- Never create, amend, merge, squash, cherry-pick or otherwise write a Git commit without a human approving that exact commit after reviewing its diff, validation results and proposed commit message. Approval is single-use; any material diff or message change requires fresh approval.
-- Never commit directly to `develop`. All work lands on a task branch (`agent/<task>`), is reviewed through a merge request, and reaches `develop` only via an explicitly human-approved merge (fast-forward, merge-commit, squash or rebase). A direct commit already on `develop` must not be rewritten or amended; leave it and apply this rule from the next change onward.
+- Before a task commit or history rewrite, obtain human approval of the exact diff, validation results and proposed commit message. Approval is single-use; a material diff or message change requires fresh approval. The approved integration path below is not a separate human gate.
+- Never commit directly to `develop`. All work lands on a task branch (`agent/<task>`) and reaches `develop` through a merge request. Include the integration path in the confirmed plan. After exact task-commit approval, an agent may integrate the expected PR head without another routine approval when required checks pass and the PR is mergeable; stop for unexpected conflicts, failing checks or material scope changes. Do not rewrite or amend a direct commit already on `develop`.
 - Human gates are non-delegable. Silence, prior approvals, task instructions, test success and another agent's approval do not satisfy them. Agents stop at the gate and leave reviewable uncommitted changes when approval is absent.
 
 ## Presenting human gates
@@ -25,7 +25,7 @@ When a step requires a human decision or approval, prepare the reviewable work f
 
 1. Name the gate, why it is required, and the exact decision or action needed.
 2. Link the relevant files or evidence and identify the precise version, diff, results, scope and unresolved limitations needed for that decision.
-3. Give numbered review steps and describe the possible responses, including how to approve or request changes. For a commit, include the exact proposed message and validation results; for a merge, identify the exact PR and head.
+3. Give numbered review steps and describe the possible responses, including how to approve or request changes. For a commit, include the exact proposed message and validation results.
 4. State what remains blocked and what will happen after approval. Continue independent authorized work where possible; never treat silence as approval.
 
 Do not ask a human to perform steps the agent can safely perform itself. Do not present an incomplete annotation or provisional result as an approval-ready quality baseline.
@@ -59,13 +59,13 @@ Never truncate or filter the output of a long-running or hard-to-reproduce comma
 - Keep plans, recovery patches and validation evidence on persistent storage. Use `/tmp` only for disposable scratch files whose loss cannot prevent task recovery. Before a handoff, preserve an up-to-date recovery patch including new files and reference its persistent path in the task plan.
 - Assign each worker one outcome and owned files; coordinate before scopes overlap. Workers prepare focused, reviewable changes and validation evidence, then commit only after the mandatory human approval of that exact commit.
 - Ignored assets are not copied. Share `docs/`, `videos/` and `models/` read-only only when needed; keep `results/` local; never copy credentials.
-- Only the integrator edits shared private progress/handoff docs; workers report required doc changes in their handoff. The integrator obtains the same human approval before any commit-writing merge or cherry-pick, resolves overlaps and runs combined validation.
+- Only the integrator edits shared private progress/handoff docs; workers report required doc changes in their handoff. The integrator resolves overlaps and runs combined validation under the confirmed integration path.
 - Clean up only after integration or explicit abandonment and artifact recovery. Never force-remove another agent's work.
 
 ## Task completion and integration
 
-- A task is complete only after its branch is pushed, reviewed through a merge request, explicitly approved by a human for merge, integrated into `develop`, and validated with the combined `develop` state — not when the worker commit exists. Agents must not merge their own work or infer merge approval from commit or plan approval.
-- After an approved merge: synchronize the `develop` worktree, run the affected combined checks, report exact results. Then confirm the branch tip is an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`) and its worktree has no uncommitted changes; remove the worktree (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`) and the remote branch (`git push origin --delete <branch>`). Safe `-d` deletes only; never force-remove a branch that is not fully merged. Prune stale refs with `git fetch origin --prune`.
+- A task is complete only after its branch is pushed, reviewed through a merge request, integrated into `develop`, and validated with the combined `develop` state — not when the worker commit exists. Integrate only the expected PR head under the confirmed plan and the conditions above.
+- After integration: synchronize the `develop` worktree, run the affected combined checks, report exact results. Then confirm the branch tip is an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`) and its worktree has no uncommitted changes; remove the worktree (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`) and the remote branch (`git push origin --delete <branch>`). Safe `-d` deletes only; never force-remove a branch that is not fully merged. Prune stale refs with `git fetch origin --prune`.
 
 ## Code and validation
 
