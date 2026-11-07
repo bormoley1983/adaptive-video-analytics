@@ -19,6 +19,17 @@ Applies to every model and client (Qwen single-agent sessions and Codex multi-ag
 - Never commit directly to `develop`. All work lands on a task branch (`agent/<task>`), is reviewed through a merge request, and reaches `develop` only via an explicitly human-approved merge (fast-forward, merge-commit, squash or rebase). A direct commit already on `develop` must not be rewritten or amended; leave it and apply this rule from the next change onward.
 - Human gates are non-delegable. Silence, prior approvals, task instructions, test success and another agent's approval do not satisfy them. Agents stop at the gate and leave reviewable uncommitted changes when approval is absent.
 
+## Presenting human gates
+
+When a step requires a human decision or approval, prepare the reviewable work first and give the human a concrete instruction set:
+
+1. Name the gate, why it is required, and the exact decision or action needed.
+2. Link the relevant files or evidence and identify the precise version, diff, results, scope and unresolved limitations needed for that decision.
+3. Give numbered review steps and describe the possible responses, including how to approve or request changes. For a commit, include the exact proposed message and validation results; for a merge, identify the exact PR and head.
+4. State what remains blocked and what will happen after approval. Continue independent authorized work where possible; never treat silence as approval.
+
+Do not ask a human to perform steps the agent can safely perform itself. Do not present an incomplete annotation or provisional result as an approval-ready quality baseline.
+
 ## Boundaries
 
 - Build the smallest working vertical slice. Add infrastructure only when active behavior requires it.

@@ -14,6 +14,7 @@
 
 # Generated environments, caches and outputs.
 .venv/
+.logs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
