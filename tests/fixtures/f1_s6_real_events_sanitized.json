@@ -1,0 +1,314 @@
+{
+  "description": "Sanitized real-event fixture for F-1-S6 acceptance review",
+  "record_count": 14,
+  "records": [
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.6331917643547058,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:00.000Z",
+      "event_id": "fixture-dwell-01",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 1.2846166666666667
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 2.7861166666666675,
+      "track_id": 23,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.7082273364067078,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:01.727Z",
+      "event_id": "fixture-dwell-02",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 4.838166666666667
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 6.339666666666667,
+      "track_id": 61,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.7290356755256653,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:01.871Z",
+      "event_id": "fixture-dwell-03",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 5.288616666666667
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 6.790116666666667,
+      "track_id": 64,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.5008260011672974,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:03.957Z",
+      "event_id": "fixture-dwell-04",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 6.940266666666667
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 8.441766666666666,
+      "track_id": 79,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.5884864926338196,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:05.265Z",
+      "event_id": "fixture-dwell-05",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 9.009
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 10.5105,
+      "track_id": 110,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.6158888339996338,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:08.041Z",
+      "event_id": "fixture-dwell-06",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 16.349666666666668
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 17.851166666666668,
+      "track_id": 190,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.6374644041061401,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:09.276Z",
+      "event_id": "fixture-dwell-07",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 18.018
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 19.5195,
+      "track_id": 201,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.41092443466186523,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:10.572Z",
+      "event_id": "fixture-dwell-08",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 19.886533333333336
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 21.388033333333336,
+      "track_id": 215,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.6029956936836243,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:12.335Z",
+      "event_id": "fixture-dwell-09",
+      "evidence": {
+        "kind": "clip"
+      },
+      "payload": {
+        "dwell_seconds": 1.5015,
+        "dwell_start_s": 23.339983333333336
+      },
+      "rule_id": "zone-dwell-short",
+      "rule_type": "dwell",
+      "schema_version": "1",
+      "session_id": "s-alias-01",
+      "source_time_s": 24.841483333333336,
+      "track_id": 240,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.3806525766849518,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:13.000Z",
+      "event_id": "fixture-line-crossing-01",
+      "evidence": {
+        "kind": null
+      },
+      "payload": {
+        "from_side": 1,
+        "to_side": -1
+      },
+      "rule_id": "crosswalk-crossing",
+      "rule_type": "line_crossing",
+      "schema_version": "1",
+      "session_id": "s-alias-02",
+      "source_time_s": 4.637966666666666,
+      "track_id": 52,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.4517703950405121,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:13.953Z",
+      "event_id": "fixture-line-crossing-02",
+      "evidence": {
+        "kind": null
+      },
+      "payload": {
+        "from_side": -1,
+        "to_side": 1
+      },
+      "rule_id": "crosswalk-crossing",
+      "rule_type": "line_crossing",
+      "schema_version": "1",
+      "session_id": "s-alias-02",
+      "source_time_s": 6.022683333333333,
+      "track_id": 71,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.407688707113266,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:15.465Z",
+      "event_id": "fixture-line-crossing-03",
+      "evidence": {
+        "kind": null
+      },
+      "payload": {
+        "from_side": 1,
+        "to_side": 1
+      },
+      "rule_id": "crosswalk-crossing",
+      "rule_type": "line_crossing",
+      "schema_version": "1",
+      "session_id": "s-alias-02",
+      "source_time_s": 8.224883333333333,
+      "track_id": 79,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.5111851096153259,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:18.945Z",
+      "event_id": "fixture-line-crossing-04",
+      "evidence": {
+        "kind": null
+      },
+      "payload": {
+        "from_side": 1,
+        "to_side": -1
+      },
+      "rule_id": "crosswalk-crossing",
+      "rule_type": "line_crossing",
+      "schema_version": "1",
+      "session_id": "s-alias-02",
+      "source_time_s": 13.480133333333333,
+      "track_id": 131,
+      "model_ref": null
+    },
+    {
+      "camera_id": "cam-alias-01",
+      "class_label": "person",
+      "confidence": 0.47445032000541687,
+      "config_version": "1",
+      "emitted_utc": "2026-11-07T00:00:19.165Z",
+      "event_id": "fixture-line-crossing-05",
+      "evidence": {
+        "kind": null
+      },
+      "payload": {
+        "from_side": 1,
+        "to_side": -1
+      },
+      "rule_id": "crosswalk-crossing",
+      "rule_type": "line_crossing",
+      "schema_version": "1",
+      "session_id": "s-alias-02",
+      "source_time_s": 13.797116666666668,
+      "track_id": 140,
+      "model_ref": null
+    }
+  ]
+}

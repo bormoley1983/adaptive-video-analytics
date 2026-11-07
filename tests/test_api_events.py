@@ -379,6 +379,7 @@ def _make_token(
     now = time.time()
     claims: dict[str, Any] = {
         "iss": ISSUER,
+        "aud": AUDIENCE,
         "sub": f"user-{tenant}",
         "tenant": tenant,
         "roles": roles if roles is not None else ["viewer"],

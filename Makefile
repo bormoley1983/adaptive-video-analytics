@@ -50,8 +50,14 @@ test-unit:
 test-integration:
 	$(PYTEST) -q -m "integration and not packaged"
 
+E2E_VENV ?= .venv-e2e
+
 test-e2e:
-	$(PYTEST) -q -m e2e
+	$(PYTHON) -m venv --clear $(E2E_VENV)
+	$(E2E_VENV)/bin/pip install --quiet --upgrade pip setuptools wheel
+	$(E2E_VENV)/bin/pip install --quiet -r tests/fixtures/packaged_api_requirements.txt
+	$(E2E_VENV)/bin/pip install --quiet --no-deps .
+	$(E2E_VENV)/bin/python -I -m pytest -q tests/test_api_acceptance_e2e.py -m e2e --override-ini pythonpath=
 
 test-infra:
 	$(PYTEST) -q -m infra

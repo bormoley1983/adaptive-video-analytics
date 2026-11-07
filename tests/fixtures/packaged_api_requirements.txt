@@ -39,3 +39,4 @@ authlib==1.6.12
 # Test dependencies (not in the lock; version ranges from pyproject dev extras).
 pytest>=8.0
 testcontainers[postgres]>=4.0
+uvicorn==0.54.0

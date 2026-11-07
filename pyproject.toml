@@ -45,6 +45,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=6.0",
+    "uvicorn==0.54.0",
     "ruff>=0.4",
     "testcontainers[postgres]>=4.0",
     "api-schema-diff>=1.0",
