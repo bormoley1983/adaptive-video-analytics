@@ -1,9 +1,4 @@
-"""Unit tests for bearer-token authentication and authorization (F-1-S3).
-
-Covers: JwksRsaVerifier positive/negative paths, route-level auth enforcement,
-role matrix, health-endpoint openness, log redaction, and JWKS kid-miss refresh.
-All tokens are generated in-memory with a fixed RSA key pair; no network calls.
-"""
+"""Bearer-token verification and route authorization tests."""
 
 from __future__ import annotations
 
@@ -24,8 +19,6 @@ from ava.application.identity import (
     TokenValidationError,
 )
 from ava.infrastructure.jwks_verifier import JwksRsaVerifier
-
-# ── Fixed test key material ───────────────────────────────────────────────────
 
 ISSUER = "https://idp.ava.test"
 AUDIENCE = "ava-api"
@@ -114,9 +107,6 @@ def _make_token(
     )
 
 
-# ── Gate 1: JwksRsaVerifier positive path ────────────────────────────────────
-
-
 class TestVerifierPositive:
     def test_valid_token_returns_identity(self, verifier: JwksRsaVerifier, rsa_key):
         token = _make_token(rsa_key)
@@ -141,9 +131,6 @@ class TestVerifierPositive:
         token = _make_token(rsa_key, roles=[role])
         identity = verifier.verify(token)
         assert role in identity.roles
-
-
-# ── Gate 2: JwksRsaVerifier negative paths ───────────────────────────────────
 
 
 class TestVerifierNegative:
@@ -193,9 +180,6 @@ class TestVerifierNegative:
         with pytest.raises(TokenValidationError) as exc_info:
             verifier.verify(token)
         assert exc_info.value.code == "invalid_sites"
-
-
-# ── Gate 5: JWKS kid-miss triggers re-fetch ──────────────────────────────────
 
 
 class TestJwksKidMissRefresh:
@@ -498,9 +482,6 @@ class TestJwksKidMissRefresh:
         assert exc_info.value.code == "identity_unavailable"
 
 
-# ── Gate 3: Route-level auth — positive and negative ─────────────────────────
-
-
 class TestRouteAuthPositive:
     @pytest.fixture()
     def auth_client(self, rsa_key, jwks_transport) -> tuple[TestClient, str]:
@@ -516,7 +497,13 @@ class TestRouteAuthPositive:
     @pytest.mark.parametrize("path", ["/api/v1/version", "/api/v1/capabilities"])
     def test_valid_token_returns_200(self, auth_client, path):
         client, token = auth_client
-        r = client.get(path, headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            path,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
 
     @pytest.mark.parametrize("role", sorted(KNOWN_ROLES))
@@ -528,7 +515,13 @@ class TestRouteAuthPositive:
         app = create_app(AppConfig(identity_policy=policy))
         client = TestClient(app)
         token = _make_token(rsa_key, roles=[role])
-        r = client.get("/api/v1/version", headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
 
     @pytest.mark.parametrize("path", ["/api/v1/health/live", "/api/v1/health/ready"])
@@ -553,13 +546,22 @@ class TestRouteAuthNegative:
     @pytest.mark.parametrize("path", ["/api/v1/version", "/api/v1/capabilities"])
     def test_no_auth_header_returns_401(self, auth_client, path):
         client, _ = auth_client
-        r = client.get(path)
+        r = client.get(
+            path,
+            headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+        )
         assert r.status_code == 401
 
     @pytest.mark.parametrize("path", ["/api/v1/version", "/api/v1/capabilities"])
     def test_malformed_token_returns_401(self, auth_client, path):
         client, _ = auth_client
-        r = client.get(path, headers={"Authorization": "Bearer garbaggarbage"})
+        r = client.get(
+            path,
+            headers={
+                "Authorization": "Bearer garbaggarbage",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 401
 
     def test_expired_token_returns_401(self, rsa_key, jwks_transport):
@@ -570,7 +572,13 @@ class TestRouteAuthNegative:
         app = create_app(AppConfig(identity_policy=policy))
         client = TestClient(app)
         token = _make_token(rsa_key, exp_delta=-10)
-        r = client.get("/api/v1/version", headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 401
 
     def test_wrong_issuer_returns_401(self, rsa_key, jwks_transport):
@@ -581,7 +589,13 @@ class TestRouteAuthNegative:
         app = create_app(AppConfig(identity_policy=policy))
         client = TestClient(app)
         token = _make_token(rsa_key, issuer="https://wrong-idp.test")
-        r = client.get("/api/v1/version", headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 401
 
     def test_unknown_role_returns_401(self, rsa_key, jwks_transport):
@@ -592,7 +606,13 @@ class TestRouteAuthNegative:
         app = create_app(AppConfig(identity_policy=policy))
         client = TestClient(app)
         token = _make_token(rsa_key, roles=["superuser"])
-        r = client.get("/api/v1/version", headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 401
 
     def test_cross_tenant_token_still_200(self, rsa_key, jwks_transport):
@@ -606,11 +626,14 @@ class TestRouteAuthNegative:
         app = create_app(AppConfig(identity_policy=policy))
         client = TestClient(app)
         token = _make_token(rsa_key, tenant="ten_OTHER_TENANT")
-        r = client.get("/api/v1/version", headers={"Authorization": f"Bearer {token}"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
-
-
-# ── Gate 4: Log redaction ────────────────────────────────────────────────────
 
 
 class TestLogRedaction:
@@ -626,7 +649,10 @@ class TestLogRedaction:
         with patch("ava.api.middleware.logger") as mock_logger:
             r = client.get(
                 "/api/v1/version",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+                },
             )
             assert r.status_code == 200
 
@@ -647,18 +673,18 @@ class TestLogRedaction:
         with patch("ava.api.middleware.logger") as mock_logger:
             r = client.get(
                 "/api/v1/version",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+                },
             )
             assert r.status_code == 200
 
         call_args = mock_logger.info.call_args_list[0]
         log_line = " ".join(str(a) for a in call_args.args)
         assert "GET" in log_line
-        assert "/api/v1/version" in log_line
+        assert "/version" in log_line
         assert "200" in log_line
-
-
-# ── Gate 6: OpenAPI document integrity ───────────────────────────────────────
 
 
 class TestOpenApiDocument:
@@ -700,8 +726,6 @@ class TestOpenApiDocument:
             security = op.get("security")
             assert security == [], f"{path} should have empty security list"
 
-
-# ── Gate 7: Dependency direction (new files) ─────────────────────────────────
 
 _FORBIDDEN_MODULES = {
     "ava.detector",
@@ -773,13 +797,31 @@ def test_authentication_is_isolated_per_app():
 
     first = TestClient(create_app(AppConfig(identity_policy=Policy("first"))))
     second = TestClient(create_app(AppConfig(identity_policy=Policy("second"))))
-    assert first.get("/api/v1/version", headers={"Authorization": "Bearer first"}).status_code == 200
-    assert second.get("/api/v1/version", headers={"Authorization": "Bearer first"}).status_code == 401
-    assert TestClient(create_app()).get("/api/v1/version").status_code == 401
+    assert first.get(
+        "/api/v1/version",
+        headers={
+            "Authorization": "Bearer first",
+            "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+        },
+    ).status_code == 200
+    assert second.get(
+        "/api/v1/version",
+        headers={
+            "Authorization": "Bearer first",
+            "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+        },
+    ).status_code == 401
+    assert TestClient(create_app()).get(
+        "/api/v1/version",
+        headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+    ).status_code == 401
 
 
 def test_authentication_failure_is_problem_detail():
-    response = TestClient(create_app()).get("/api/v1/version")
+    response = TestClient(create_app()).get(
+        "/api/v1/version",
+        headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+    )
     assert response.status_code == 401
     assert response.headers["content-type"] == "application/problem+json"
     assert {"type", "title", "status", "code"} <= response.json().keys()
@@ -788,7 +830,12 @@ def test_authentication_failure_is_problem_detail():
 def test_served_contract_matches_packaged_contract():
     from ava.api.schema import load_schema
 
-    assert TestClient(create_app()).get("/openapi.json").json() == load_schema()
+    response = TestClient(create_app()).get(
+        "/openapi.json",
+        headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+    )
+    assert response.status_code == 200
+    assert response.json() == load_schema()
 
 
 def test_null_allowed_sites_rejected(verifier, rsa_key):

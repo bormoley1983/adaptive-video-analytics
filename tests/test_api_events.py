@@ -1,12 +1,4 @@
-"""API tests for the S5 read slice and F-1-S6 camera soft-delete.
-
-Deterministic: in-memory grant/event/camera fakes plus real RS256 tokens via
-the JwksRsaVerifier pattern. Covers authentication, tenant/camera/site
-scoping, 404 for inaccessible objects, 400 for invalid cursors, cursor
-traversal, evidence redaction, admin-only grant mutation (decisions D3-D8),
-grant request validation (G1), and camera soft-delete with event-to-camera
-mapping preservation (F-1-S6, ADR-19).
-"""
+"""Grant-scoped reads, mutation retries and camera lifecycle API tests."""
 
 from __future__ import annotations
 
@@ -22,6 +14,13 @@ from fastapi.testclient import TestClient
 
 from ava.api.app import AppConfig, create_app
 from ava.application.access import Camera, CameraGrant
+from ava.application.mutation import (
+    REPRESENTATION_VERSION,
+    IdempotencyKeyReused,
+    MutationResult,
+    TargetState,
+    make_etag,
+)
 from ava.events import EventRecord, EvidenceLocator
 from ava.infrastructure.jwks_verifier import JwksRsaVerifier
 
@@ -32,9 +31,6 @@ KID = "test-key-1"
 CAM_A = "cam_a"
 CAM_B = "cam_b"
 SITE_A = "site_a"
-
-
-# ── In-memory fakes ───────────────────────────────────────────────────────────
 
 
 class FakeGrantRepository:
@@ -48,6 +44,11 @@ class FakeGrantRepository:
 
     def get_camera_grant(self, camera_id: str) -> CameraGrant | None:
         return self._grants.get(camera_id)
+
+    def get_camera_grant_with_revision(self, camera_id):
+        grant = self.get_camera_grant(camera_id)
+        cam = self._camera_repo.find_camera_by_camera_id(camera_id)
+        return grant, cam.revision if cam else None
 
     def list_camera_grants(self) -> list[CameraGrant]:
         return sorted(self._grants.values(), key=lambda g: g.camera_id)
@@ -84,7 +85,7 @@ class FakeEventRepository:
 
 
 class FakeCameraRepository:
-    """In-memory camera registry with soft-delete semantics (F-1-S6)."""
+    """In-memory camera registry with soft-delete semantics."""
 
     def __init__(self, cameras: dict[str, Camera]) -> None:
         self._cameras = dict(cameras)
@@ -132,6 +133,177 @@ class FakeCameraRepository:
         """Full row including soft-deleted; None when never created."""
         return self._cameras.get(camera_id)
 
+    def get_revision(self, camera_id: str) -> int | None:
+        """Current revision for optimistic concurrency."""
+        cam = self._cameras.get(camera_id)
+        return cam.revision if cam is not None else None
+
+    def increment_revision(self, camera_id: str) -> None:
+        """Increment the camera revision after a state change."""
+        cam = self._cameras.get(camera_id)
+        if cam is not None:
+            self._cameras[camera_id] = Camera(
+                camera_id=cam.camera_id,
+                site_id=cam.site_id,
+                deleted_at=cam.deleted_at,
+                updated_at=cam.updated_at,
+                revision=cam.revision + 1,
+            )
+
+
+class FakeMutationTransaction:
+    """In-memory MutationTransaction for unit tests.
+
+    Delegates to the fake grant and camera repositories. Idempotency is
+    tracked in a simple dict keyed by (namespace, key_hash), storing the
+    fingerprint alongside the response so that reuse with a different
+    fingerprint raises IdempotencyKeyReused (matching production).
+    """
+
+    def __init__(
+        self,
+        grant_repo: FakeGrantRepository,
+        camera_repo: FakeCameraRepository,
+    ) -> None:
+        self._grant_repo = grant_repo
+        self._camera_repo = camera_repo
+        # key: (namespace, key_hash) → (fingerprint, status, body, etag)
+        # Fingerprint is recorded at claim time; response fields are filled
+        # by store_completed before commit.
+        self._store: dict[tuple[str, str], tuple[str, int | None, dict | None, str | None]] = {}
+        self._namespace: str = ""
+
+    def new_transaction(self, operation):
+        child = FakeMutationTransaction(self._grant_repo, self._camera_repo)
+        child._store = self._store
+        child._operation = operation
+        return child
+
+    async def begin(self) -> None:
+        pass
+
+    async def claim_key(
+        self, namespace: str, key_hash: str, fingerprint: str
+    ) -> tuple[bool, MutationResult | None]:
+        self._namespace = namespace
+        k = (namespace, key_hash)
+        if k in self._store:
+            stored_fp, status, body, etag = self._store[k]
+            if stored_fp != fingerprint:
+                raise IdempotencyKeyReused(
+                    "Idempotency key was already used for a different operation"
+                )
+            # Completed record → replay. (status is None only for pending,
+            # which the production adapter treats as a fresh claim.)
+            if status is not None:
+                return (False, MutationResult(status_code=status, body=body, etag=etag, is_replay=True))
+            # Pending with same fingerprint → treat as fresh claim.
+            return (True, None)
+        # New claim: record the fingerprint now; response filled later.
+        self._store[k] = (fingerprint, None, None, None)
+        return (True, None)
+
+    async def lock_scope(self, scope) -> None:
+        pass
+
+    async def read_target(self, camera_id: str):
+        cam = self._camera_repo.find_camera_by_camera_id(camera_id)
+        if cam is None:
+            return TargetState(exists=False)
+        if self._operation == "camera_delete":
+            return TargetState(True, cam.revision,
+                               make_etag("camera", camera_id, REPRESENTATION_VERSION, cam.revision))
+        grant = self._grant_repo.get_camera_grant(camera_id)
+        etag = (
+            make_etag("grant", camera_id, REPRESENTATION_VERSION, cam.revision)
+            if grant is not None
+            else None
+        )
+        data = {
+            "camera_id": cam.camera_id,
+            "name": None,
+            "site_id": cam.site_id,
+            "deleted_at": cam.deleted_at,
+            "revision": cam.revision,
+            "has_grant": grant is not None,
+        }
+        if grant is not None:
+            data["tenant_ids"] = sorted(grant.tenant_ids)
+        return TargetState(exists=True, revision=cam.revision, etag=etag, data=data)
+
+    async def apply_mutation(self, camera_id: str, operation: str, params: dict):
+        if operation == "grant_put":
+            site_id = params.get("site_id")
+            tenant_ids = params.get("tenant_ids", [])
+            self._grant_repo.set_camera_grant_and_reactivate_camera(
+                camera_id, site_id, tenant_ids
+            )
+            cam = self._camera_repo.find_camera_by_camera_id(camera_id)
+            if cam is None:
+                raise ValueError("camera_not_found")
+            new_rev = cam.revision + 1
+            self._camera_repo.increment_revision(camera_id)
+            etag = make_etag("grant", camera_id, REPRESENTATION_VERSION, new_rev)
+            data = {
+                "camera_id": camera_id,
+                "site_id": site_id if site_id is not None else cam.site_id,
+                "tenant_ids": sorted(tenant_ids),
+                "updated_at": None,
+            }
+            return TargetState(exists=True, revision=new_rev, etag=etag, data=data)
+
+        if operation == "grant_delete":
+            existed = self._grant_repo.revoke_camera_grant(camera_id)
+            cam = self._camera_repo.find_camera_by_camera_id(camera_id)
+            if cam is None:
+                raise ValueError("camera_not_found")
+            new_rev = cam.revision + 1 if existed else cam.revision
+            if existed:
+                self._camera_repo.increment_revision(camera_id)
+            data = {
+                "camera_id": camera_id,
+                "site_id": cam.site_id,
+                "deleted_at": cam.deleted_at,
+                "revision": new_rev,
+            }
+            return TargetState(exists=True, revision=new_rev, etag=None, data=data)
+
+        if operation == "camera_delete":
+            cam = self._camera_repo.find_camera_by_camera_id(camera_id)
+            if cam is None:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=404,
+                    detail={"type": "about:blank", "title": "Not Found",
+                            "status": 404, "code": "not_found",
+                            "detail": "camera not found"},
+                )
+            if cam.deleted_at is not None:
+                return TargetState(exists=True, revision=cam.revision, etag=None,
+                                   data={"camera_id": camera_id, "revision": cam.revision})
+            self._camera_repo.delete_camera(camera_id)
+            new_rev = cam.revision + 1
+            self._camera_repo.increment_revision(camera_id)
+            return TargetState(exists=True, revision=new_rev, etag=None,
+                               data={"camera_id": camera_id, "revision": new_rev})
+
+        raise ValueError(f"unknown operation: {operation!r}")
+
+    async def store_completed(
+        self, key_hash: str, status_code: int, body: dict | None, etag: str | None
+    ) -> None:
+        k = (self._namespace, key_hash)
+        fp = self._store[k][0]  # preserve fingerprint recorded at claim time
+        self._store[k] = (fp, status_code, body, etag)
+
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
+        pending = [k for k, v in self._store.items() if v[1] is None]
+        for key in pending:
+            del self._store[key]
+
 
 def _record(event_id: str, camera_id: str, emitted_utc: str) -> EventRecord:
     return EventRecord(
@@ -158,7 +330,7 @@ GRANTS = {
     CAM_B: CameraGrant(CAM_B, site_id=None, tenant_ids=frozenset({"ten_a", "ten_b"})),
 }
 
-# Camera registry mirrors the grants (F-1-S6): one row per camera.
+# Camera registry mirrors the grants: one row per camera.
 CAMERAS = {
     CAM_A: Camera(CAM_A, site_id=SITE_A),
     CAM_B: Camera(CAM_B, site_id=None),
@@ -169,9 +341,6 @@ RECORDS = [
     _record("evt_001", CAM_B, "2026-11-05T10:00:01Z"),
     _record("evt_002", CAM_A, "2026-11-05T10:00:02Z"),
 ]
-
-
-# ── Token helpers (same pattern as test_api_auth.py) ─────────────────────────
 
 
 def _make_rsa_key() -> rsa.RSAPrivateKey:
@@ -232,29 +401,53 @@ def api_client(rsa_key, jwk) -> tuple[TestClient, dict[str, Any]]:
     )
     cam_repo = FakeCameraRepository(CAMERAS)
     grant_repo = FakeGrantRepository(GRANTS, camera_repository=cam_repo)
+    from ava.application.mutation import MutationAdmission
+    mutation_txn = FakeMutationTransaction(grant_repo, cam_repo)
     app = create_app(AppConfig(
         identity_policy=policy,
         grant_repository=grant_repo,
         event_repository=FakeEventRepository(RECORDS),
         camera_repository=cam_repo,
+        mutation_txn=mutation_txn,
+        mutation_admission=MutationAdmission(4),
     ))
     return TestClient(app), {"rsa_key": rsa_key}
 
 
 def _auth(env: dict[str, Any], *, tenant: str = "ten_a",
           roles: list[str] | None = None,
-          sites: list[str] | None = None) -> dict[str, str]:
+          sites: list[str] | None = None,
+          idem_key: str | None = None) -> dict[str, str]:
     token = _make_token(env["rsa_key"], tenant=tenant, roles=roles, allowed_sites=sites)
-    return {"Authorization": f"Bearer {token}"}
+    if idem_key is None:
+        # Deterministic per-test key: each call site that mutates state
+        # must pass an explicit idem_key to avoid cross-operation replay.
+        idem_key = _next_idem_key()
+    return {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": idem_key,
+    }
 
 
-# ── Gate 1: authentication and scoping ────────────────────────────────────────
+# Deterministic idempotency key generator for tests. Each call yields a
+# unique, stable UUID so that distinct operations get distinct keys while
+# retrying the same operation can reuse an explicit key.
+_idem_counter = 0
+
+
+def _next_idem_key() -> str:
+    global _idem_counter
+    _idem_counter += 1
+    return f"aaaaaaaa-0000-4000-8000-{_idem_counter:012d}"
 
 
 class TestAuthAndScoping:
     def test_missing_token_401(self, api_client):
         client, _ = api_client
-        r = client.get("/api/v1/events")
+        r = client.get(
+            "/api/v1/events",
+            headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+        )
         assert r.status_code == 401
         assert r.headers["content-type"].startswith("application/problem+json")
 
@@ -290,9 +483,6 @@ class TestAuthAndScoping:
         assert cams == [CAM_A]
 
 
-# ── Gate 2: detail reads, cursor contract, problem details ────────────────────
-
-
 class TestDetailAndCursor:
     def test_detail_visible(self, api_client):
         client, env = api_client
@@ -306,7 +496,7 @@ class TestDetailAndCursor:
         client, env = api_client
         r = client.get("/api/v1/events/evt_nope", headers=_auth(env))
         assert r.status_code == 404
-        assert r.json()["detail"]["code"] == "not_found"
+        assert r.json()["code"] == "not_found"
 
     def test_detail_inaccessible_is_404(self, api_client):
         client, env = api_client
@@ -339,7 +529,7 @@ class TestDetailAndCursor:
             "/api/v1/events", headers=_auth(env), params={"cursor": "!!!bad!!!"}
         )
         assert r.status_code == 400
-        assert r.json()["detail"]["code"] == "invalid_cursor"
+        assert r.json()["code"] == "invalid_cursor"
 
     def test_page_size_bounds(self, api_client):
         client, env = api_client
@@ -354,9 +544,6 @@ class TestDetailAndCursor:
         client, env = api_client
         r = client.get("/api/v1/events", headers=_auth(env))
         assert "x-request-id" in {k.lower() for k in r.headers}
-
-
-# ── Gate 3: no sensitive data leaks ───────────────────────────────────────────
 
 
 class TestRedaction:
@@ -402,10 +589,7 @@ class TestRedaction:
         client.app.state.grant_repository = Broken(GRANTS)
         r = client.get("/api/v1/events", headers=_auth(env))
         assert r.status_code == 502
-        assert r.json()["detail"]["code"] == "grant_data_unusable"
-
-
-# ── Gate 4: admin-only grant mutation (D5) ────────────────────────────────────
+        assert r.json()["code"] == "grant_data_unusable"
 
 
 class TestGrantMutation:
@@ -420,9 +604,9 @@ class TestGrantMutation:
 
     def test_admin_can_replace_and_revoke(self, api_client):
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
+        admin_put = _auth(env, roles=["admin"], idem_key="bbbbbbbb-0000-4000-8000-000000000001")
         r = client.put(
-            f"/api/v1/grants/{CAM_A}", headers=admin,
+            f"/api/v1/grants/{CAM_A}", headers=admin_put,
             json={"site_id": SITE_A, "tenant_ids": ["ten_b"]},
         )
         assert r.status_code == 200
@@ -441,30 +625,77 @@ class TestGrantMutation:
         assert "evt_003" in ids and "evt_002" in ids
 
         # Revoke: camera disappears from inventory and history.
-        r = client.delete(f"/api/v1/grants/{CAM_A}", headers=admin)
-        assert r.status_code == 200
-        assert r.json()["tenant_ids"] == []
+        admin_del = _auth(env, roles=["admin"], idem_key="bbbbbbbb-0000-4000-8000-000000000002")
+        r = client.delete(f"/api/v1/grants/{CAM_A}", headers=admin_del)
+        assert r.status_code == 204
         r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
         cams = [c["camera_id"] for c in r.json()["cameras"]]
         assert CAM_A not in cams
 
+    def test_put_then_delete_same_key_returns_409(self, api_client):
+        """PUT → DELETE with the same idempotency key must return 409.
 
-# ── Gate 5: grant request validation (G1) ─────────────────────────────────────
+        The DELETE has a different fingerprint (different method and path),
+        so the stored PUT result cannot be replayed. The grant is NOT deleted.
+        """
+        client, env = api_client
+        shared_key = "cccccccc-0000-4000-8000-000000000001"
+        admin_put = _auth(env, roles=["admin"], idem_key=shared_key)
+        r = client.put(
+            f"/api/v1/grants/{CAM_A}", headers=admin_put,
+            json={"site_id": SITE_A, "tenant_ids": ["ten_b"]},
+        )
+        assert r.status_code == 200
+
+        # DELETE with the same key but different fingerprint → 409.
+        admin_del = _auth(env, roles=["admin"], idem_key=shared_key)
+        r = client.delete(f"/api/v1/grants/{CAM_A}", headers=admin_del)
+        assert r.status_code == 409
+        assert r.json()["code"] == "idempotency_key_reused"
+
+        # The grant was NOT deleted — it still exists.
+        admin_get = _auth(env, roles=["admin"])
+        r = client.get(f"/api/v1/grants/{CAM_A}", headers=admin_get)
+        assert r.status_code == 200
+        assert r.json()["camera_id"] == CAM_A
+
+    def test_identical_put_retry_replays_original_result(self, api_client):
+        """An identical PUT retry (same key, same fingerprint) replays the
+        original 200 result without re-applying the mutation."""
+        client, env = api_client
+        shared_key = "dddddddd-0000-4000-8000-000000000001"
+        admin_put = _auth(env, roles=["admin"], idem_key=shared_key)
+
+
+        r1 = client.put(
+            f"/api/v1/grants/{CAM_A}", headers=admin_put,
+            json={"site_id": SITE_A, "tenant_ids": ["ten_b"]},
+        )
+        assert r1.status_code == 200
+        body1 = r1.json()
+
+        # Identical retry: same key, same method, same path, same body.
+        admin_put_retry = _auth(env, roles=["admin"], idem_key=shared_key)
+        r2 = client.put(
+            f"/api/v1/grants/{CAM_A}", headers=admin_put_retry,
+            json={"site_id": SITE_A, "tenant_ids": ["ten_b"]},
+        )
+        assert r2.status_code == 200
+        body2 = r2.json()
+        # Replay returns the original result.
+        assert body1 == body2
 
 
 class TestGrantRequestValidation:
     def test_empty_tenant_ids_rejected_422(self, api_client):
         """PUT /grants/{cam} with an empty tenant_ids list must return 422."""
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
+        admin = _auth(env, roles=["admin"], idem_key="ffffffff-0000-4000-8000-000000000001")
         r = client.put(
             f"/api/v1/grants/{CAM_A}", headers=admin,
             json={"site_id": SITE_A, "tenant_ids": []},
         )
         assert r.status_code == 422
-
-
-# ── Gate 6: camera soft-delete (F-1-S6) ───────────────────────────────────────
 
 
 class TestCameraSoftDelete:
@@ -477,7 +708,7 @@ class TestCameraSoftDelete:
     def test_admin_soft_delete_sets_deleted_at(self, api_client):
         """DELETE /cameras/{id} sets deleted_at on the camera row."""
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
+        admin = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000001")
         r = client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
         assert r.status_code == 204
 
@@ -490,7 +721,7 @@ class TestCameraSoftDelete:
     def test_soft_deleted_camera_invisible_to_inventory(self, api_client):
         """A soft-deleted camera does not appear in GET /cameras."""
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
+        admin = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000002")
         client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
 
         # ten_b still has a grant to CAM_A but the camera is deleted.
@@ -503,10 +734,10 @@ class TestCameraSoftDelete:
 
         The camera row is retained, so event-to-camera mapping resolves and
         the grant still governs access. This is the core rationale for
-        soft-delete on the camera entity (ADR-19).
+        soft-delete on the camera entity.
         """
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
+        admin = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000003")
         client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
 
         # ten_a still has a grant to CAM_A; events remain visible.
@@ -517,8 +748,8 @@ class TestCameraSoftDelete:
     def test_reactivation_via_grant_upsert(self, api_client):
         """PUT /grants/{id} re-activates a soft-deleted camera."""
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
-        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+        admin_del = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000004")
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin_del)
 
         # Confirm it's gone from inventory.
         r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
@@ -526,8 +757,9 @@ class TestCameraSoftDelete:
         assert CAM_A not in cams
 
         # Re-activate by upserting a grant.
+        admin_put = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000005")
         r = client.put(
-            f"/api/v1/grants/{CAM_A}", headers=admin,
+            f"/api/v1/grants/{CAM_A}", headers=admin_put,
             json={"site_id": SITE_A, "tenant_ids": ["ten_a", "ten_b"]},
         )
         assert r.status_code == 200
@@ -536,9 +768,6 @@ class TestCameraSoftDelete:
         r = client.get("/api/v1/cameras", headers=_auth(env, tenant="ten_b"))
         cams = [c["camera_id"] for c in r.json()["cameras"]]
         assert CAM_A in cams
-
-
-# ── Gate 7: camera state inspection (F-1-S6) ──────────────────────────────────
 
 
 class TestCameraStateEndpoint:
@@ -562,9 +791,10 @@ class TestCameraStateEndpoint:
     def test_admin_can_inspect_soft_deleted_camera(self, api_client):
         """GET /cameras/{id} returns the row with deleted_at for a deleted camera."""
         client, env = api_client
-        admin = _auth(env, roles=["admin"])
-        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin)
+        admin_del = _auth(env, roles=["admin"], idem_key="eeeeeeee-0000-4000-8000-000000000006")
+        client.delete(f"/api/v1/cameras/{CAM_A}", headers=admin_del)
 
+        admin = _auth(env, roles=["admin"])
         r = client.get(f"/api/v1/cameras/{CAM_A}", headers=admin)
         assert r.status_code == 200
         body = r.json()
@@ -577,4 +807,4 @@ class TestCameraStateEndpoint:
         admin = _auth(env, roles=["admin"])
         r = client.get("/api/v1/cameras/cam_never_created", headers=admin)
         assert r.status_code == 404
-        assert r.json()["detail"]["code"] == "not_found"
+        assert r.json()["code"] == "not_found"

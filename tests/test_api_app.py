@@ -1,8 +1,4 @@
-"""Unit tests for the AVA API service shell (F-1-S2).
-
-Covers: app factory, four routes, readiness states, and dependency-direction
-import rules (routes must not import detector/ORM/persistence).
-"""
+"""API composition, readiness and dependency-boundary tests."""
 
 from __future__ import annotations
 
@@ -21,9 +17,6 @@ from ava.application.health import (
 )
 
 SRC = Path(__file__).resolve().parent.parent / "src"
-
-
-# ── Gate 1: create_app() returns a working FastAPI instance ──────────────────
 
 
 class TestAppFactory:
@@ -64,9 +57,6 @@ class TestAppFactory:
         assert registry.list() == []
 
 
-# ── Gate 2: All four routes return correct status codes and bodies ───────────
-
-
 class TestRoutes:
     @pytest.fixture()
     def client(self) -> TestClient:
@@ -93,7 +83,13 @@ class TestRoutes:
         assert body["dependencies"] == []
 
     def test_version(self, client: TestClient):
-        r = client.get("/api/v1/version", headers={"Authorization": "Bearer test"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": "Bearer test",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["package_version"] == "0.1.0"
@@ -101,12 +97,15 @@ class TestRoutes:
         assert "python_version" in body
 
     def test_capabilities_empty(self, client: TestClient):
-        r = client.get("/api/v1/capabilities", headers={"Authorization": "Bearer test"})
+        r = client.get(
+            "/api/v1/capabilities",
+            headers={
+                "Authorization": "Bearer test",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
         assert r.json() == {"capabilities": []}
-
-
-# ── Gate 3: Readiness distinguishes ready/degraded/unavailable/stale/unknown ─
 
 
 class TestReadinessStates:
@@ -175,8 +174,6 @@ class TestReadinessStates:
         dep = r.json()["dependencies"][0]
         assert dep["detail"] == "connection refused"
 
-
-# ── Gate 4+5: Dependency direction — no forbidden imports in API layer ───────
 
 _FORBIDDEN_MODULES = {
     "ava.detector",
@@ -253,7 +250,6 @@ class TestDependencyDirection:
                 f"{f.name} has unexpected application imports"
 
 
-# ── Gate 6: test-unit passes (this file) ─────────────────────────────────────
 # (Implicit — running this file IS the unit test.)
 
 
@@ -283,11 +279,8 @@ def test_contributor_exception_is_reported_without_details():
     assert "secret" not in (result.reports[0].detail or "")
 
 
-# ── F-1-S6: composition-time validation of camera registry invariant ─────────
-
-
 class TestCameraRegistryComposition:
-    """F-1-S6 (ADR-19): the camera registry is required when grant and event
+    """the camera registry is required when grant and event
     repositories are configured. Grant writes without a registry would create
     cameras absent from the registry, breaking inventory filtering and state
     inspection when the same database is later served through

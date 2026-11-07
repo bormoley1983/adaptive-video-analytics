@@ -1,14 +1,6 @@
-"""PostgreSQL adapter for trusted camera grants (F-1-S5, decision D1).
+"""Persist current camera grants and atomically reactivate their cameras.
 
-Implements the provider-independent :class:`GrantRepository` port over the
-``camera_grants`` table (alembic revision 0002) and provides the admin
-write path used by the grant mutation endpoint. Reads return the *current*
-assignment per camera so policy is re-evaluated on every request; no
-caching assumptions.
-
-Malformed rows (e.g. NULL tenant_ids despite NOT NULL, or a row that fails
-type checks) raise :class:`GrantLookupError` from the lookup path and are
-skipped by the collection path — access is denied, never inferred.
+Malformed trusted grants deny access; grant reads do not infer assignments.
 """
 
 from __future__ import annotations
@@ -19,6 +11,7 @@ from psycopg import errors as pg_errors
 from psycopg_pool import ConnectionPool
 
 from ..application.access import CameraGrant, GrantLookupError
+from .mutation_postgres import lock_camera
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +67,7 @@ def _row_to_grant(row: tuple) -> CameraGrant:
 class PostgresGrantRepository:
     """GrantRepository over PostgreSQL; also exposes the admin write path."""
 
-    EXPECTED_REVISION = "0003"
+    EXPECTED_REVISION = "0004"
 
     def __init__(self, dsn: str, *, pool_min: int = 1, pool_max: int = 4) -> None:
         self._dsn = dsn
@@ -117,6 +110,16 @@ class PostgresGrantRepository:
             return None
         return _row_to_grant(row)
 
+    def get_camera_grant_with_revision(self, camera_id: str):
+        """Read a grant representation and its revision in one snapshot."""
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT g.camera_id, g.site_id, g.tenant_ids, g.updated_at, c.revision "
+                "FROM camera_grants g JOIN cameras c USING (camera_id) WHERE camera_id = %s",
+                (camera_id,),
+            ).fetchone()
+        return (None, None) if row is None else (_row_to_grant(row[:4]), row[4])
+
     def list_camera_grants(self) -> list[CameraGrant]:
         """All current trusted assignments; malformed rows are skipped."""
         with self._pool.connection() as conn:
@@ -136,17 +139,54 @@ class PostgresGrantRepository:
         self.set_camera_grant_and_reactivate_camera(camera_id, site_id, tenant_ids)
 
     def revoke_camera_grant(self, camera_id: str) -> bool:
-        """Remove the assignment for *camera_id* (admin). True if a row existed."""
+        """Remove the assignment for *camera_id* (admin). True if a row existed.
+
+        Also increments the camera revision when the camera row exists
+        .
+        """
+        _INCREMENT_REVISION_SQL = (
+            "UPDATE cameras SET revision = revision + 1, updated_at = now() "
+            "WHERE camera_id = %s"
+        )
         with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
             cur = conn.execute(_DELETE_GRANT_SQL, (camera_id,))
-            return cur.rowcount > 0
+            existed = cur.rowcount > 0
+            if existed:
+                # Advance the camera revision to signal state change.
+                conn.execute(_INCREMENT_REVISION_SQL, (camera_id,))
+            return existed
+
+    def get_camera_revision(self, camera_id: str) -> int | None:
+        """Return the current camera revision, or None if no row exists."""
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT revision FROM cameras WHERE camera_id = %s", (camera_id,)
+            ).fetchone()
+        return row[0] if row is not None else None
+
+    def increment_camera_revision(self, camera_id: str) -> int:
+        """Atomically increment and return the new camera revision."""
+        with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
+            cur = conn.execute(
+                "UPDATE cameras SET revision = revision + 1, updated_at = now() "
+                "WHERE camera_id = %s",
+                (camera_id,),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"camera {camera_id!r} does not exist")
+            row = conn.execute(
+                "SELECT revision FROM cameras WHERE camera_id = %s", (camera_id,)
+            ).fetchone()
+            return row[0]
 
     def set_camera_grant_and_reactivate_camera(
         self, camera_id: str, site_id: str | None, tenant_ids: list[str]
     ) -> None:
         """Atomically upsert the grant AND re-activate the camera row.
 
-        F-1-S6 (ADR-19): when an admin replaces a grant for a soft-deleted
+        when an admin replaces a grant for a soft-deleted
         camera, both the grant write and the camera re-activation must commit
         or roll back together. This method uses a single connection/transaction
         spanning both tables so a partial failure cannot leave the camera
@@ -162,9 +202,11 @@ class PostgresGrantRepository:
         ON CONFLICT (camera_id) DO UPDATE
         SET site_id = EXCLUDED.site_id,
             deleted_at = NULL,
-            updated_at = now()
+            updated_at = now(),
+            revision = cameras.revision + 1
         """
         with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
             conn.execute(
                 _UPSERT_GRANT_SQL, (camera_id, site_id, list(tenant_ids))
             )

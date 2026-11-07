@@ -1,13 +1,14 @@
-"""Authenticated read routes for events, cameras and grants (F-1-S5, F-1-S6).
+"""Authenticated event reads and transactional camera/grant mutations.
 
-Each route invokes one focused application use case and maps its result to
-the public contract. No SQL, S3, broker or business state transitions here
-(ADR-16); grant mutation is the only write in the S5 slice and is admin-only
-(decision D5). F-1-S6 adds camera soft-delete (``DELETE /cameras/{id}``) and
-state inspection (``GET /cameras/{id}``), both admin-only.
+Mutation routes invoke one application workflow; persistence owns the
+transaction, scope locks and stored retry results.
 """
 
 from __future__ import annotations
+
+import hashlib
+import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -19,6 +20,19 @@ from ..application.event_read import (
     page_events,
 )
 from ..application.identity import CallerIdentity
+from ..application.mutation import (
+    REPRESENTATION_VERSION,
+    IdempotencyKeyReused,
+    InvalidIfMatch,
+    MutationAdmission,
+    MutationScope,
+    PreconditionFailed,
+    RequestInProgress,
+    TargetNotFound,
+    compute_fingerprint,
+    execute_idempotent_mutation,
+    make_etag,
+)
 from .auth import reject_authentication
 from .dto_events import (
     CameraItem,
@@ -31,6 +45,8 @@ from .dto_events import (
     GrantRequest,
     GrantResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -49,9 +65,13 @@ def _caller(request: Request) -> CallerIdentity:
 
 def _problem(status: int, code: str, detail: str) -> HTTPException:
     """Build an RFC 9457 problem detail (handled by the app's handler)."""
-    title = {400: "Bad Request", 404: "Not Found", 502: "Bad Gateway"}.get(
-        status, "Error"
-    )
+    title = {
+        400: "Bad Request",
+        404: "Not Found",
+        409: "Conflict",
+        412: "Precondition Failed",
+        502: "Bad Gateway",
+    }.get(status, "Error")
     return HTTPException(
         status_code=status,
         detail={"type": "about:blank", "title": title, "status": status,
@@ -83,12 +103,22 @@ def _to_item(record) -> EventItem:
     )
 
 
+def _key_hash(namespace: str, key: str) -> str:
+    """SHA-256 hex digest of the idempotency key."""
+    return hashlib.sha256(json.dumps([namespace, key], separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _namespace(caller: CallerIdentity) -> str:
+    """Caller scope for idempotency key namespacing (tenant:subject)."""
+    return json.dumps([caller.tenant, caller.subject], separators=(",", ":"))
+
+
 @router.get("/events", response_model=EventsPageResponse)
 def list_events(
     request: Request,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    caller: CallerIdentity = Depends(_caller),  # noqa: B008,
+    caller: CallerIdentity = Depends(_caller),  # noqa: B008
 ) -> EventsPageResponse:
     """Scoped event collection with cursor pagination (D4/D6)."""
     state = request.app.state
@@ -134,14 +164,13 @@ def list_cameras_route(
     """Inventory of cameras visible to the caller (D4).
 
     Soft-deleted cameras are excluded when a camera registry is configured
-    (F-1-S6, ADR-19).
+    .
     """
     state = request.app.state
     try:
         grants = {g.camera_id: g for g in state.grant_repository.list_camera_grants()}
     except GrantLookupError as exc:
         raise _problem(502, "grant_data_unusable", str(exc)) from exc
-    # F-1-S6: filter out soft-deleted cameras when the registry is available.
     active_ids: set[str] | None = None
     camera_repo = state.camera_repository
     if camera_repo is not None:
@@ -152,47 +181,28 @@ def list_cameras_route(
     )
 
 
-@router.put("/grants/{camera_id}", response_model=GrantResponse)
-def set_grant(
+@router.get("/grants/{camera_id}", response_model=GrantResponse)
+def get_grant(
     camera_id: str,
-    body: GrantRequest,
     request: Request,
-    caller: CallerIdentity = Depends(_caller),  # noqa: B008,
+    response: Response,
+    caller: CallerIdentity = Depends(_caller),  # noqa: B008
 ) -> GrantResponse:
-    """Replace the trusted assignment for a camera (admin-only, D5).
+    """Inspect the trusted assignment for a camera (admin-only).
 
-    When a camera registry is configured, the grant upsert and camera
-    re-activation are performed atomically in a single transaction
-    (F-1-S6, ADR-19) so a partial failure cannot leave the camera active
-    while the old grant still applies.
+    Returns the grant and its strong ETag, or 404 when no grant exists.
+    the ETag is resource-specific (resource_type="grant") so it
+    differs from the camera's own ETag even at the same revision.
     """
     if "admin" not in caller.roles:
         reject_authentication("insufficient_role", "admin role required")
     state = request.app.state
-    # F-1-S6: atomic grant + camera re-activation when registry is available.
-    # Configurations that cannot provide the atomic path are rejected at
-    # composition time (create_app); this check is a defensive guard.
-    camera_repo = state.camera_repository
-    if camera_repo is not None:
-        grant_repo = state.grant_repository
-        if not hasattr(grant_repo, "set_camera_grant_and_reactivate_camera"):
-            raise _problem(
-                502,
-                "atomic_grant_unavailable",
-                "grant repository does not support atomic camera re-activation; "
-                "use compose_postgres_app or a GrantRepository that implements "
-                "set_camera_grant_and_reactivate_camera (ADR-19)",
-            )
-        grant_repo.set_camera_grant_and_reactivate_camera(
-            camera_id, body.site_id, list(body.tenant_ids)
-        )
-    else:
-        state.grant_repository.set_camera_grant(
-            camera_id, body.site_id, list(body.tenant_ids)
-        )
-    grant = state.grant_repository.get_camera_grant(camera_id)
+    grant, revision = state.grant_repository.get_camera_grant_with_revision(camera_id)
     if grant is None:
-        raise _problem(502, "grant_data_unusable", "grant write did not persist")
+        raise _problem(404, "not_found", "no grant for this camera")
+    response.headers["ETag"] = make_etag(
+        "grant", camera_id, REPRESENTATION_VERSION, revision
+    )
     return GrantResponse(
         camera_id=grant.camera_id,
         site_id=grant.site_id,
@@ -201,62 +211,20 @@ def set_grant(
     )
 
 
-@router.delete("/grants/{camera_id}", response_model=GrantResponse)
-def revoke_grant(
-    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
-) -> GrantResponse:
-    """Remove the trusted assignment for a camera (admin-only, D5).
-
-    Grants are safe to hard-delete: events map to the camera row, not the
-    grant row, so removing a grant never breaks event-to-camera mapping.
-    """
-    if "admin" not in caller.roles:
-        reject_authentication("insufficient_role", "admin role required")
-    state = request.app.state
-    state.grant_repository.revoke_camera_grant(camera_id)
-    grant = state.grant_repository.get_camera_grant(camera_id)
-    return GrantResponse(
-        camera_id=camera_id,
-        site_id=grant.site_id if grant else None,
-        tenant_ids=[],
-        updated_at=grant.updated_at if grant else None,
-    )
-
-
-@router.delete("/cameras/{camera_id}", status_code=204)
-def delete_camera(
-    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
-) -> Response:
-    """Soft-delete a camera (admin-only, F-1-S6).
-
-    Sets ``deleted_at`` on the camera row instead of removing it. The row is
-    retained so that events referencing ``camera_id`` keep a resolvable target
-    (event-to-camera mapping). The camera becomes invisible to inventory and
-    scoping queries until re-activated via grant upsert. Returns 204 when an
-    active camera was deleted, 404 when no active camera exists.
-    """
-    if "admin" not in caller.roles:
-        reject_authentication("insufficient_role", "admin role required")
-    state = request.app.state
-    camera_repo = state.camera_repository
-    if camera_repo is None:
-        raise _problem(502, "camera_registry_unavailable", "camera registry is not configured")
-    deleted = camera_repo.delete_camera(camera_id)
-    if not deleted:
-        raise _problem(404, "not_found", "no active camera with this id")
-    return Response(status_code=204)
-
-
 @router.get("/cameras/{camera_id}", response_model=CameraState)
 def get_camera_state(
-    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
+    camera_id: str,
+    request: Request,
+    response: Response,
+    caller: CallerIdentity = Depends(_caller),  # noqa: B008
 ) -> CameraState:
-    """Inspect the full state of a camera including soft-delete (admin-only, F-1-S6).
+    """Inspect the full state of a camera including soft-delete (admin-only).
 
     Returns the complete camera row including ``deleted_at`` so operators can
-    inspect soft-deleted cameras. Returns 404 when no row exists at all
-    (never created or hard-removed — but cameras are only ever soft-deleted,
-    so this means "not found").
+    inspect soft-deleted cameras. Returns 404 when no row exists at all.
+
+    the response carries an ``ETag`` header with the camera's
+    resource-specific strong ETag (resource_type="camera").
     """
     if "admin" not in caller.roles:
         reject_authentication("insufficient_role", "admin role required")
@@ -267,9 +235,173 @@ def get_camera_state(
     camera = camera_repo.find_camera_by_camera_id(camera_id)
     if camera is None:
         raise _problem(404, "not_found", "camera not found")
+
+    response.headers["ETag"] = make_etag(
+        "camera", camera_id, REPRESENTATION_VERSION, camera.revision
+    )
     return CameraState(
         camera_id=camera.camera_id,
         site_id=camera.site_id,
         deleted_at=camera.deleted_at,
         updated_at=camera.updated_at,
     )
+
+
+async def _execute_mutation(
+    request: Request,
+    caller: CallerIdentity,
+    camera_id: str,
+    operation: str,
+    params: dict,
+    if_match_raw: str | None,
+    path: str,
+    body: dict | None = None,
+) -> tuple[int, dict | None, str | None]:
+    """Shared mutation executor: admission → idempotent workflow → result.
+
+    Returns (status_code, body, etag). Raises HTTPException for 409/412/400.
+
+    Requests fail closed when no transaction factory is configured.
+    """
+    state = request.app.state
+    txn = state.mutation_txn
+
+    if txn is None:
+        raise _problem(502, "mutation_unavailable", "A transactional mutation adapter is required")
+    txn = txn.new_transaction(operation)
+
+    admission: MutationAdmission = state.mutation_admission
+    if not admission.try_acquire():
+        raise _problem(
+            409, "request_in_progress",
+            "mutation admission limit reached; retry later",
+        )
+    try:
+        key = request.state.idempotency_key
+        namespace = _namespace(caller)
+        key_hash = _key_hash(namespace, key)
+        fingerprint = compute_fingerprint(
+            request.method, path, body=body, if_match=if_match_raw
+        )
+        scope = MutationScope(key=f"camera:{camera_id}")
+
+        result = await execute_idempotent_mutation(
+            txn=txn,
+            namespace=namespace,
+            key_hash=key_hash,
+            fingerprint=fingerprint,
+            scope=scope,
+            camera_id=camera_id,
+            if_match_raw=if_match_raw,
+            operation=operation,
+            params=params,
+        )
+        return (result.status_code, result.body, result.etag)
+
+    except TargetNotFound:
+        raise _problem(404, "not_found", "camera not found") from None
+    except IdempotencyKeyReused:
+        raise _problem(
+            409, "idempotency_key_reused",
+            "Idempotency key was already used for a different operation",
+        ) from None
+    except RequestInProgress:
+        raise _problem(
+            409, "request_in_progress",
+            "A concurrent request with the same idempotency key is in progress",
+        ) from None
+    except PreconditionFailed as exc:
+        raise _problem(
+            412, "precondition_failed", str(exc),
+        ) from exc
+    except InvalidIfMatch as exc:
+        raise _problem(400, "invalid_if_match", str(exc)) from exc
+    finally:
+        admission.release()
+
+
+@router.put("/grants/{camera_id}", response_model=GrantResponse)
+async def set_grant(
+    camera_id: str,
+    body: GrantRequest,
+    request: Request,
+    response: Response,
+    caller: CallerIdentity = Depends(_caller),  # noqa: B008
+) -> GrantResponse:
+    """Replace the trusted assignment for a camera (admin-only, D5).
+
+    idempotent mutation with atomic claim-before-mutate. The grant
+    upsert and revision advance occur within a single transaction alongside
+    the idempotency record. If-Match is evaluated atomically against the
+    target's current ETag within the same transaction.
+
+    Returns 200 with GrantResponse and the updated grant ETag.
+    """
+    if "admin" not in caller.roles:
+        reject_authentication("insufficient_role", "admin role required")
+
+    if_match_raw = request.headers.get("If-Match")
+    path = f"/api/v1/grants/{camera_id}"
+    body_dict = body.model_dump()
+
+    _status, result_body, etag = await _execute_mutation(
+        request, caller, camera_id, "grant_put",
+        params={"site_id": body.site_id, "tenant_ids": list(body.tenant_ids)},
+        if_match_raw=if_match_raw, path=path, body=body_dict,
+    )
+
+    if etag is not None:
+        response.headers["ETag"] = etag
+
+    # Map the result body to GrantResponse.
+    if result_body is None:
+        raise _problem(502, "grant_data_unusable", "grant write did not persist")
+    return GrantResponse(**result_body)
+
+
+@router.delete("/grants/{camera_id}", status_code=204)
+async def revoke_grant(
+    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
+) -> Response:
+    """Remove the trusted assignment for a camera (admin-only, D5).
+
+    idempotent mutation. Returns 204 whether or not a grant existed
+    (absent grant → no-op, still 204). The revision advances only when a
+    grant actually existed. If-Match is evaluated atomically within the
+    transaction.
+    """
+    if "admin" not in caller.roles:
+        reject_authentication("insufficient_role", "admin role required")
+
+    if_match_raw = request.headers.get("If-Match")
+    path = f"/api/v1/grants/{camera_id}"
+
+    status, _, _ = await _execute_mutation(
+        request, caller, camera_id, "grant_delete",
+        params={}, if_match_raw=if_match_raw, path=path,
+    )
+    return Response(status_code=status)
+
+
+@router.delete("/cameras/{camera_id}", status_code=204)
+async def delete_camera(
+    camera_id: str, request: Request, caller: CallerIdentity = Depends(_caller),  # noqa: B008
+) -> Response:
+    """Soft-delete a camera.
+
+    idempotent mutation. Returns 204 when an active camera was
+    deleted or was already soft-deleted (no-op). Returns 404 when the
+    camera never existed. The revision advances on first deletion only.
+    If-Match is evaluated atomically within the transaction.
+    """
+    if "admin" not in caller.roles:
+        reject_authentication("insufficient_role", "admin role required")
+
+    if_match_raw = request.headers.get("If-Match")
+    path = f"/api/v1/cameras/{camera_id}"
+
+    status, _, _ = await _execute_mutation(
+        request, caller, camera_id, "camera_delete",
+        params={}, if_match_raw=if_match_raw, path=path,
+    )
+    return Response(status_code=status)

@@ -11,7 +11,7 @@ indexes never appear in any response body. A dev identity is not a real
 identity provider; this test does not validate one.
 
 Reproducible invocation:
-    make test-packaged          # from the task worktree root
+    make test-packaged # from the task worktree root
 
 The Makefile target builds an isolated virtualenv with the API-relevant
 subset of the locked stack, installs the package non-editably, and runs this
@@ -46,7 +46,7 @@ from psycopg import sql
 
 import ava
 from alembic import command
-from ava.api.app import AppConfig, create_app
+from ava.api.app import compose_postgres_app
 from ava.application.identity import CallerIdentity, TokenValidationError
 from ava.events import EventRecord, EvidenceLocator
 from ava.persistence.cameras_postgres import PostgresCameraRepository
@@ -72,9 +72,6 @@ skip_if_no_docker = pytest.mark.skipif(
     not _docker_available(),
     reason="Docker not available (required for Testcontainers PostgreSQL)",
 )
-
-
-# ── Generated sanitized synthetic fixture (explicitly NOT a real event) ─────
 
 
 def make_fixture_event(
@@ -114,8 +111,6 @@ def make_fixture_event_file_only(
         event_id, camera_id=camera_id, emitted_utc=emitted_utc, time_basis="file_pts_only"
     )
 
-
-# ── Test-only development identity (never a production auth bypass) ─────────
 
 _DEV_TOKENS = {
     "dev-tenant-a": CallerIdentity("a", "tenant_a", frozenset({"viewer"})),
@@ -180,17 +175,9 @@ class TestPackagedApiIntegration:
         repo = PostgresGrantRepository(pg["dsn"])
         cam_repo = PostgresCameraRepository(pg["dsn"])
         try:
-            app = create_app(
-                AppConfig(
-                    package_version="0.1.0",
-                    contract_version="1.0.0",
-                    identity_policy=DevIdentityPolicy(),
-                    grant_repository=repo,
-                    event_repository=sink,
-                    camera_repository=cam_repo,
-                )
-            )
-            yield TestClient(app), sink, repo
+            app = compose_postgres_app(pg["dsn"], identity_policy=DevIdentityPolicy())
+            with TestClient(app) as client:
+                yield client, sink, repo
         finally:
             sink.close()
             repo.close()
@@ -257,7 +244,7 @@ class TestPackagedApiIntegration:
     def test_health_version_and_capabilities(self, api_client):
         client, sink, repo = api_client
         self._seed(sink, repo)
-        headers = {"Authorization": "Bearer dev-tenant-a"}
+        headers = {"Authorization": "Bearer dev-tenant-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
 
         live = client.get("/api/v1/health/live")
         assert live.status_code == 200
@@ -285,14 +272,14 @@ class TestPackagedApiIntegration:
     def test_unauthenticated_requests_rejected(self, api_client):
         client, _, _ = api_client
         for path in ("/api/v1/version", "/api/v1/capabilities", "/api/v1/events"):
-            r = client.get(path)
+            r = client.get(path, headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"})
             assert r.status_code == 401, f"{path} without token must be 401"
             assert r.json()["code"] in ("missing_token", "invalid_token")
 
     def test_event_retrieval_scoped_and_paginated(self, api_client):
         client, sink, repo = api_client
         self._seed(sink, repo)
-        headers = {"Authorization": "Bearer dev-tenant-a"}
+        headers = {"Authorization": "Bearer dev-tenant-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
 
         first = client.get("/api/v1/events", headers=headers, params={"limit": 2})
         assert first.status_code == 200
@@ -326,12 +313,12 @@ class TestPackagedApiIntegration:
         client, sink, repo = api_client
         self._seed(sink, repo)
 
-        other = {"Authorization": "Bearer dev-tenant-b"}
+        other = {"Authorization": "Bearer dev-tenant-b", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
         assert client.get("/api/v1/events", headers=other).json()["items"] == []
         assert client.get("/api/v1/events/pkg-evt-3", headers=other).status_code == 404
         assert client.get("/api/v1/cameras", headers=other).json()["cameras"] == []
 
-        restricted = {"Authorization": "Bearer dev-site-a"}
+        restricted = {"Authorization": "Bearer dev-site-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
         visible = client.get("/api/v1/events", headers=restricted).json()["items"]
         # cam-b has no site, so a site-restricted caller cannot see its history.
         assert [i["event_id"] for i in visible] == ["pkg-evt-3", "pkg-evt-2", "pkg-evt-0"]
@@ -342,7 +329,7 @@ class TestPackagedApiIntegration:
     def test_redaction_never_leaks_model_ref_paths_or_payload(self, api_client):
         client, sink, repo = api_client
         self._seed(sink, repo)
-        headers = {"Authorization": "Bearer dev-tenant-a"}
+        headers = {"Authorization": "Bearer dev-tenant-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
 
         page = client.get("/api/v1/events", headers=headers, params={"limit": 200})
         assert page.status_code == 200
@@ -371,8 +358,9 @@ class TestPackagedApiIntegration:
     def test_admin_grant_mutation_and_revocation(self, api_client):
         client, sink, repo = api_client
         self._seed(sink, repo)
-        tenant_a = {"Authorization": "Bearer dev-tenant-a"}
-        admin = {"Authorization": "Bearer dev-admin"}
+        tenant_a = {"Authorization": "Bearer dev-tenant-a", "Idempotency-Key": "00000000-0000-4000-8000-0000000000a1"}
+        admin_put = {"Authorization": "Bearer dev-admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000b1"}
+        admin_del = {"Authorization": "Bearer dev-admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"}
 
         # Non-admin grant mutation is rejected.
         r = client.put(
@@ -385,7 +373,7 @@ class TestPackagedApiIntegration:
         # Admin replaces the assignment; tenant_a loses access immediately.
         r = client.put(
             "/api/v1/grants/cam-a",
-            headers=admin,
+            headers=admin_put,
             json={"site_id": "site_1", "tenant_ids": ["tenant_b"]},
         )
         assert r.status_code == 200
@@ -393,8 +381,7 @@ class TestPackagedApiIntegration:
         assert client.get("/api/v1/events/pkg-evt-3", headers=tenant_a).status_code == 404
 
         # Revocation removes the assignment entirely.
-        r = client.delete("/api/v1/grants/cam-a", headers=admin)
-        assert r.status_code == 200
-        assert r.json()["tenant_ids"] == []
-        other = {"Authorization": "Bearer dev-tenant-b"}
+        r = client.delete("/api/v1/grants/cam-a", headers=admin_del)
+        assert r.status_code == 204
+        other = {"Authorization": "Bearer dev-tenant-b", "Idempotency-Key": "00000000-0000-4000-8000-0000000000d1"}
         assert client.get("/api/v1/events", headers=other).json()["items"] == []

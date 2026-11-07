@@ -1,12 +1,7 @@
-"""PostgreSQL event sink adapter (ADR-16).
+"""Persist events and their outbox entries in one PostgreSQL transaction.
 
-Implements :class:`ava.persistence.ports.EventSink` against PostgreSQL 18
-using ``psycopg`` v3 and a ``psycopg_pool.ConnectionPool``. No ORM.
-
-The transaction boundary is internal to :meth:`write`: each call opens a
-transaction, inserts the event row and its outbox row atomically, and
-commits. Duplicate ``event_id`` delivery is idempotent via
-``ON CONFLICT DO NOTHING``.
+Duplicate event delivery leaves the existing event and outbox entry unchanged.
+Camera registry rows are retained for historical event-to-camera mapping.
 """
 
 from __future__ import annotations
@@ -42,7 +37,7 @@ INSERT INTO outbox (event_id, aggregate_type, payload)
 VALUES (%s, 'event', %s::jsonb)
 """
 
-# F-1-S6 (ADR-19): ensure the camera registry has a row for every camera
+# ensure the camera registry has a row for every camera
 # that emits events. site_id is NULL because the event sink does not carry
 # site assignment — grants are the canonical source of site. If a grant
 # already exists for this camera, its upsert will set site_id. This keeps
@@ -134,7 +129,7 @@ class PostgresEventSink:
             raise
         self._pool = pool
 
-    EXPECTED_REVISION = "0003"
+    EXPECTED_REVISION = "0004"
 
     def check_connection(self) -> None:
         """Verify a database connection is available."""
@@ -171,7 +166,7 @@ class PostgresEventSink:
     def write(self, record: EventRecord) -> bool:
         """Insert event + outbox atomically. Returns False on duplicate.
 
-        F-1-S6 (ADR-19): also ensures a camera registry row exists for the
+        Also ensures a camera registry row exists for the
         event's camera_id so the event-to-camera mapping is complete even
         for cameras that have no grant. The upsert is idempotent and uses
         site_id NULL (grants are the canonical site source).
@@ -212,7 +207,7 @@ class PostgresEventSink:
                     "camera_id": record.camera_id,
                 })),
             )
-            # F-1-S6: ensure camera registry row exists for this camera.
+            # ensure camera registry row exists for this camera.
             conn.execute(_ENSURE_CAMERA_SQL, (record.camera_id,))
         return True
 

@@ -67,7 +67,9 @@ async def problem_handler(request: Request, exc: HTTPException) -> JSONResponse:
     The request ID resolved by the middleware is added to the body so error
     responses are traceable like every other response.
     """
-    content = dict(exc.detail)
+    content = dict(exc.detail) if isinstance(exc.detail, dict) else {
+        "type": "about:blank", "title": "Error", "status": exc.status_code, "detail": str(exc.detail)
+    }
     request_id = getattr(request.state, "request_id", None)
     if request_id is not None and "request_id" not in content:
         content["request_id"] = request_id

@@ -1,10 +1,6 @@
-"""Integration tests for the S5 read side, grant repository and camera
-registry (Testcontainers).
+"""Exercise grant-scoped reads and camera persistence in disposable PostgreSQL.
 
-Runs against a throwaway PostgreSQL 18 container started by Testcontainers —
-never against an existing system database. Each test gets a fresh schema,
-migrated to head (revision 0003), so migration + adapter behavior is
-exercised end to end.
+Each test uses an isolated schema migrated to the current schema revision.
 """
 
 from __future__ import annotations
@@ -146,7 +142,7 @@ class TestS5ReadSideIntegration:
                 camera_repository=cam_repo,
             ))
             with TestClient(app) as client:
-                headers = {"Authorization": "Bearer tenant-a"}
+                headers = {"Authorization": "Bearer tenant-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
                 first = client.get("/api/v1/events", headers=headers, params={"limit": 2})
                 assert first.status_code == 200
                 assert [item["event_id"] for item in first.json()["items"]] == ["evt-3", "evt-2"]
@@ -159,10 +155,10 @@ class TestS5ReadSideIntegration:
                 assert [item["event_id"] for item in second.json()["items"]] == ["evt-1"]
                 detail = client.get("/api/v1/events/evt-3", headers=headers)
                 assert detail.status_code == 200 and "model_ref" not in detail.json()
-                other = {"Authorization": "Bearer tenant-b"}
+                other = {"Authorization": "Bearer tenant-b", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
                 assert client.get("/api/v1/events", headers=other).json()["items"] == []
                 assert client.get("/api/v1/events/evt-3", headers=other).status_code == 404
-                restricted = {"Authorization": "Bearer site-a"}
+                restricted = {"Authorization": "Bearer site-a", "Idempotency-Key": "00000000-0000-4000-8000-000000000001"}
                 assert client.get("/api/v1/events/evt-1", headers=restricted).status_code == 404
                 visible = client.get("/api/v1/events", headers=restricted).json()["items"]
                 assert [item["event_id"] for item in visible] == ["evt-3", "evt-2"]
@@ -179,7 +175,7 @@ class TestS5ReadSideIntegration:
             row = conn.execute(
                 "SELECT version_num FROM alembic_version"
             ).fetchone()
-            assert row[0] == "0003"
+            assert row[0] == "0004"
             # camera_grants table from 0002 still present.
             grant_cols = {
                 r[0]
@@ -292,7 +288,7 @@ class TestS5ReadSideIntegration:
             sink.close()
 
     def test_event_write_creates_camera_row(self, isolated_schema):
-        """F-1-S6 (ADR-19): event write ensures a camera registry row exists.
+        """event write ensures a camera registry row exists.
 
         A camera that emits events but has no grant still gets a cameras row
         (site_id NULL) so the event-to-camera mapping is complete. The upsert
@@ -380,7 +376,7 @@ class TestS5ReadSideIntegration:
             repo.close()
 
     def test_migration_backfill_populates_cameras_from_grants(self, pg_container, monkeypatch):
-        """P1 #1: upgrading from 0002 with existing data backfills cameras.
+        """upgrading from 0002 with existing data backfills cameras.
 
         Seeds a schema at revision 0002 (with grant rows AND event rows for
         cameras that have no grant), then runs the ACTUAL alembic upgrade to
@@ -398,7 +394,7 @@ class TestS5ReadSideIntegration:
         monkeypatch.setenv("PGOPTIONS", f"-c search_path={schema}")
 
         try:
-            # Step 1: migrate to 0002 (pre-camera-registry state).
+
             command.upgrade(Config("alembic.ini"), "0002")
             with _connect(pg) as conn:
                 rev = conn.execute(
@@ -425,16 +421,16 @@ class TestS5ReadSideIntegration:
                     "42, 'snapshot', '{}')"
                 )
 
-            # Step 2: run the ACTUAL upgrade to head (0003).
+
             command.upgrade(Config("alembic.ini"), "head")
 
-            # Step 3: verify the migration's backfill populated cameras from
+
             # BOTH sources: grants (with site_id) and events (site_id NULL).
             with _connect(pg) as conn:
                 rev = conn.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()
-                assert rev[0] == "0003"
+                assert rev[0] == "0004"
                 rows = conn.execute(
                     "SELECT camera_id, site_id, deleted_at FROM cameras ORDER BY camera_id"
                 ).fetchall()
@@ -484,7 +480,7 @@ class TestS5ReadSideIntegration:
             grant_repo.close()
 
     def test_camera_soft_delete_and_reactivation_via_real_adapter(self, isolated_schema):
-        """P1 #3: real PostgresCameraRepository soft-delete + re-activation."""
+        """real PostgresCameraRepository soft-delete + re-activation."""
         pg = isolated_schema
         cam_repo = PostgresCameraRepository(pg["dsn"])
         grant_repo = PostgresGrantRepository(pg["dsn"])
@@ -526,7 +522,7 @@ class TestS5ReadSideIntegration:
             grant_repo.close()
 
     def test_compose_postgres_app_exposes_camera_routes(self, isolated_schema):
-        """P1 #3: compose_postgres_app wires all three repositories.
+        """compose_postgres_app wires all three repositories.
 
         Verifies the explicit supported composition path: DELETE and GET
         /cameras/{camera_id} work against real Postgres adapters (not fakes).
@@ -563,11 +559,15 @@ class TestS5ReadSideIntegration:
         # Use the production composition entry point.
         app = compose_postgres_app(pg["dsn"], identity_policy=IdentityPolicy())
         with TestClient(app) as client:
-            admin = {"Authorization": "Bearer admin"}
-            viewer = {"Authorization": "Bearer viewer"}
+            admin_get1 = {"Authorization": "Bearer admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000a1"}
+            viewer = {"Authorization": "Bearer viewer", "Idempotency-Key": "00000000-0000-4000-8000-0000000000b1"}
+            admin_del = {"Authorization": "Bearer admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000c1"}
+            admin_get2 = {"Authorization": "Bearer admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000d1"}
+            admin_del2 = {"Authorization": "Bearer admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000e1"}
+            admin_put = {"Authorization": "Bearer admin", "Idempotency-Key": "00000000-0000-4000-8000-0000000000f1"}
 
             # GET /cameras/{id} — admin sees the camera.
-            resp = client.get("/api/v1/cameras/cam-compose", headers=admin)
+            resp = client.get("/api/v1/cameras/cam-compose", headers=admin_get1)
             assert resp.status_code == 200
             body = resp.json()
             assert body["camera_id"] == "cam-compose"
@@ -579,37 +579,37 @@ class TestS5ReadSideIntegration:
             assert resp.status_code == 401
 
             # DELETE /cameras/{id} — admin soft-deletes.
-            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin)
+            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin_del)
             assert resp.status_code == 204
 
             # Camera is now hidden from inventory.
-            resp = client.get("/api/v1/cameras", headers=admin)
+            resp = client.get("/api/v1/cameras", headers=admin_get2)
             assert resp.status_code == 200
             assert [c["camera_id"] for c in resp.json()["cameras"]] == []
 
             # GET /cameras/{id} — admin sees deleted_at set.
-            resp = client.get("/api/v1/cameras/cam-compose", headers=admin)
+            resp = client.get("/api/v1/cameras/cam-compose", headers=admin_get2)
             assert resp.status_code == 200
             assert resp.json()["deleted_at"] is not None
 
-            # DELETE again — 404 (no active camera).
-            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin)
-            assert resp.status_code == 404
+            # DELETE again — 204.
+            resp = client.delete("/api/v1/cameras/cam-compose", headers=admin_del2)
+            assert resp.status_code == 204
 
             # Re-activate via grant upsert (atomic path).
             resp = client.put(
                 "/api/v1/grants/cam-compose",
-                headers=admin,
+                headers=admin_put,
                 json={"site_id": "site_1", "tenant_ids": ["tenant_a"]},
             )
             assert resp.status_code == 200
 
             # Camera is back in inventory.
-            resp = client.get("/api/v1/cameras", headers=admin)
+            resp = client.get("/api/v1/cameras", headers=admin_get2)
             assert [c["camera_id"] for c in resp.json()["cameras"]] == ["cam-compose"]
 
             # Events are accessible again.
-            resp = client.get("/api/v1/events/evt-compose-1", headers=admin)
+            resp = client.get("/api/v1/events/evt-compose-1", headers=admin_get1)
             assert resp.status_code == 200
 
         # Pools are closed after TestClient context exits (lifespan shutdown).
@@ -628,7 +628,7 @@ class TestS5ReadSideIntegration:
                     repo.list_cameras()
 
     def test_compose_postgres_app_rejects_outdated_schema(self, pg_container, monkeypatch):
-        """P1 #1 (this round): compose_postgres_app rejects a 0002 schema.
+        """compose_postgres_app rejects a 0002 schema.
 
         Seeds a database at revision 0002 (no cameras table) and verifies that
         compose_postgres_app raises RuntimeError during composition — the app
@@ -653,7 +653,7 @@ class TestS5ReadSideIntegration:
                 assert rev[0] == "0002"
 
             # compose_postgres_app must reject the outdated schema.
-            with pytest.raises(RuntimeError, match="0002.*0003|not migrated"):
+            with pytest.raises(RuntimeError, match="0002.*0004|not migrated"):
                 compose_postgres_app(pg["dsn"])
         finally:
             with _connect(pg, autocommit=True) as conn:
@@ -662,7 +662,7 @@ class TestS5ReadSideIntegration:
                 )
 
     def test_compose_postgres_app_readiness_reports_database(self, isolated_schema):
-        """P1 #1 (this round): readiness contributor reports database state.
+        """readiness contributor reports database state.
 
         After compose_postgres_app succeeds, /health/ready includes a required
         'database' dependency in READY state. When the pool is closed (simulating
@@ -687,7 +687,7 @@ class TestS5ReadSideIntegration:
             app.state.event_repository.check_connection()
 
     def test_atomic_reactivation_rolls_back_on_failure(self, isolated_schema):
-        """P1 (failure injection): atomic grant + re-activation rolls back.
+        """atomic grant + re-activation rolls back.
 
         Injects a failure after the grant write but before the camera upsert
         within the same transaction. Verifies that BOTH changes are rolled

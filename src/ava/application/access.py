@@ -1,30 +1,8 @@
-"""Camera access policy for shared static cameras (F-1-S5, F-1-S6).
+"""Grant-based camera access and camera-registry contracts.
 
-Defines the trusted camera-grant model, the provider-independent
-``GrantRepository`` and ``CameraRepository`` ports and the scope rules that
-decide whether a caller may see a camera (and therefore its event history).
-
-Rules (confirmed decisions D1-D8, docs/dev-plan/F-1-S5-01-contract.md):
-- A static camera has an optional physical site and explicit grants to one
-  or more tenants. Access requires BOTH a grant for the caller's tenant AND
-  a site check: a caller restricted to specific sites cannot access a camera
-  with no site; a site-unrestricted caller (``site_ids is None``) still
-  needs the tenant grant.
-- Current grants govern historical event access: new grants expose earlier
-  history, revocation removes access. The policy is evaluated per read.
-- Missing or malformed trusted grant data denies access; it is never
-  inferred.
-
-F-1-S6 adds the camera as a first-class entity (``CameraRepository``) with
-soft-delete: deleting a camera hides it from inventory while retaining the
-row so that events referencing ``camera_id`` keep a resolvable target
-(event-to-camera mapping). Grants remain independently revocable via hard
-delete; they are safe to remove because the camera row, not the grant row,
-is what events map to.
-
-No FastAPI, SQLAlchemy or database imports here (ADR-16 dependency
-direction). Infrastructure adapters implement :class:`GrantRepository` and
-:class:`CameraRepository`.
+Current tenant grants and optional site restrictions govern historical access.
+Soft-deleted cameras retain their registry rows and grants so their event
+history remains resolvable. Grant revocation removes access independently.
 """
 
 from __future__ import annotations
@@ -54,7 +32,7 @@ class CameraGrant:
 
 @dataclass(frozen=True)
 class Camera:
-    """Trusted static-camera registry entry (F-1-S6).
+    """Trusted static-camera registry entry.
 
     A camera is a first-class entity distinct from its tenant grants.
     ``site_id`` is the canonical ``site_`` ULID or ``None`` when the camera
@@ -71,6 +49,7 @@ class Camera:
     site_id: str | None = None
     deleted_at: str | None = None
     updated_at: str | None = None
+    revision: int = 1
 
 
 class GrantLookupError(Exception):
@@ -95,11 +74,11 @@ class GrantRepository(Protocol):
     every read, so grant changes take effect on the next request without
     caching assumptions.
 
-    F-1-S6: when a camera registry is configured, grant replacement must be
+    When a camera registry is configured, grant replacement must be
     atomic with camera re-activation. Implementations that support the camera
     registry MUST provide :meth:`set_camera_grant_and_reactivate_camera`;
     the application layer rejects configurations that cannot guarantee this
-    invariant (ADR-19).
+    invariant.
     """
 
     def get_camera_grant(self, camera_id: str) -> CameraGrant | None:
@@ -108,6 +87,10 @@ class GrantRepository(Protocol):
         Returns ``None`` when the camera has no recorded assignment (deny).
         Raises :class:`GrantLookupError` when data is present but malformed.
         """
+        ...
+
+    def get_camera_grant_with_revision(self, camera_id: str) -> tuple[CameraGrant | None, int | None]:
+        """Return representation and revision from the same snapshot."""
         ...
 
     def list_camera_grants(self) -> list[CameraGrant]:
@@ -127,13 +110,13 @@ class GrantRepository(Protocol):
     def set_camera_grant_and_reactivate_camera(
         self, camera_id: str, site_id: str | None, tenant_ids: list[str]
     ) -> None:
-        """Atomically upsert the grant AND re-activate the camera row (F-1-S6).
+        """Atomically upsert the grant AND re-activate the camera row.
 
         Both the grant write and the camera re-activation must commit or roll
         back together. Implementations that span multiple tables MUST use a
         single transaction. This method is required when a camera registry is
         configured; the application layer rejects configurations where the
-        grant repository cannot provide it (ADR-19).
+        grant repository cannot provide it.
         """
         ...
 
@@ -143,13 +126,13 @@ class CameraRepository(Protocol):
     """Outbound port: read and manage the trusted static-camera registry.
 
     A camera is a first-class entity distinct from its tenant grants
-    (F-1-S6). Implementations (PostgreSQL ``cameras`` table, test fakes)
+    . Implementations (PostgreSQL ``cameras`` table, test fakes)
     return the *current* state of each camera. Soft-delete sets
     ``deleted_at`` on the row instead of removing it; deleted cameras are
-    hidden from :meth:`list_cameras` and :meth:`get_camera` but the row is
+    hidden from:meth:`list_cameras` and:meth:`get_camera` but the row is
     retained so that events referencing ``camera_id`` keep a resolvable
     target (event-to-camera mapping). Grants are independently revocable via
-    hard delete on :class:`GrantRepository`; they are safe to remove because
+    hard delete on:class:`GrantRepository`; they are safe to remove because
     the camera row, not the grant row, is what events map to.
     """
 
@@ -230,10 +213,10 @@ def camera_accessible(grant: CameraGrant | None, caller: CallerIdentity) -> bool
 def require_camera_access(
     repository: GrantRepository, camera_id: str, caller: CallerIdentity
 ) -> CameraGrant:
-    """Return the grant for *camera_id* or raise :class:`AccessDenied`.
+    """Return the grant for *camera_id* or raise:class:`AccessDenied`.
 
     Direct-lookup path used by single-object reads. Collection paths must
-    apply the equivalent rule via :func:`camera_accessible` so both use one
+    apply the equivalent rule via:func:`camera_accessible` so both use one
     set of scope rules. Malformed trusted data denies (never infers).
     """
     try:
@@ -252,7 +235,7 @@ def visible_cameras(
 ) -> list[CameraGrant]:
     """Return the grants for cameras *caller* may access (collection path).
 
-    Uses the same scope rules as :func:`require_camera_access`; cameras with
+    Uses the same scope rules as:func:`require_camera_access`; cameras with
     missing or malformed assignments are excluded, not guessed.
     """
     visible: list[CameraGrant] = []

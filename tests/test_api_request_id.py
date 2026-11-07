@@ -43,9 +43,6 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-# ── parse_request_id unit behavior ───────────────────────────────────────────
-
-
 class TestParseRequestId:
     def test_absent_header_generates_uuid(self):
         value = parse_request_id(None)
@@ -91,9 +88,6 @@ class TestParseRequestId:
         assert _UUID_RE.match(generate_request_id())
 
 
-# ── Response header behavior ─────────────────────────────────────────────────
-
-
 class TestResponseHeader:
     def test_generated_header_when_absent(self):
         client = _client()
@@ -113,19 +107,26 @@ class TestResponseHeader:
         client = _client()
         r = client.get(
             "/api/v1/version",
-            headers={"Authorization": "Bearer t", REQUEST_ID_HEADER: value},
+            headers={
+                "Authorization": "Bearer t",
+                REQUEST_ID_HEADER: value,
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
         )
         assert r.status_code == 200
         assert r.headers[REQUEST_ID_HEADER] == value
 
     def test_generated_header_on_protected_route(self):
         client = _client()
-        r = client.get("/api/v1/version", headers={"Authorization": "Bearer t"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                "Authorization": "Bearer t",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 200
         assert _UUID_RE.match(r.headers[REQUEST_ID_HEADER])
-
-
-# ── Invalid header rejection ─────────────────────────────────────────────────
 
 
 class TestInvalidHeaderRejection:
@@ -169,19 +170,28 @@ class TestInvalidHeaderRejection:
     def test_rejection_applies_before_authentication(self):
         """A malformed ID is rejected even on protected routes, before auth."""
         client = _client()
-        r = client.get("/api/v1/version", headers={REQUEST_ID_HEADER: "bogus"})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                REQUEST_ID_HEADER: "bogus",
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 400
         assert r.json()["code"] == "invalid_request_id"
-
-
-# ── Error responses carry the request ID ─────────────────────────────────────
 
 
 class TestErrorResponsesCarryRequestId:
     def test_401_problem_body_contains_matching_request_id(self):
         value = str(uuid.uuid4())
         client = _client()
-        r = client.get("/api/v1/version", headers={REQUEST_ID_HEADER: value})
+        r = client.get(
+            "/api/v1/version",
+            headers={
+                REQUEST_ID_HEADER: value,
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            },
+        )
         assert r.status_code == 401
         assert r.headers["content-type"].startswith("application/problem+json")
         assert r.json()["request_id"] == value
@@ -189,14 +199,14 @@ class TestErrorResponsesCarryRequestId:
 
     def test_401_problem_body_contains_generated_request_id(self):
         client = _client()
-        r = client.get("/api/v1/version")
+        r = client.get(
+            "/api/v1/version",
+            headers={"Idempotency-Key": "00000000-0000-4000-8000-000000000001"},
+        )
         assert r.status_code == 401
         new_id = r.headers[REQUEST_ID_HEADER]
         assert _UUID_RE.match(new_id)
         assert r.json()["request_id"] == new_id
-
-
-# ── Log redaction ────────────────────────────────────────────────────────────
 
 
 class TestLogRedaction:
@@ -221,9 +231,6 @@ class TestLogRedaction:
         assert r.status_code == 200
         lines = [rec.getMessage() for rec in caplog.records]
         assert any(f"request_id={value}" in line for line in lines)
-
-
-# ── Concurrent isolation ─────────────────────────────────────────────────────
 
 
 class TestConcurrentIsolation:
@@ -280,9 +287,6 @@ class TestConcurrentIsolation:
 
         assert not errors
         assert seen == dict(zip(supplied, supplied))
-
-
-# ── OpenAPI contract documents the header ────────────────────────────────────
 
 
 class TestOpenApiContract:

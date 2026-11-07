@@ -1,24 +1,25 @@
-"""FastAPI application factory for the AVA API.
-
-Composition root per ADR-16: validates configuration, constructs adapters,
-supplies them to use cases. No business logic in this module.
-"""
+"""Compose API use cases, configuration and infrastructure adapters."""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from ..application.capabilities import CapabilityRegistry
 from ..application.health import HealthContributor, ReadinessChecker
 from ..application.identity import IdentityPolicy
+from ..application.mutation import MutationAdmission, MutationTransactionFactory
 from ..application.version import get_build_info
 from .auth import AuthenticationError, problem_handler
+from .idempotency_middleware import IdempotencyMiddleware
 from .middleware import RequestLoggingMiddleware
 from .routes import router
 from .schema import load_schema
+
+logger = logging.getLogger(__name__)
 
 
 def compose_postgres_app(
@@ -28,14 +29,17 @@ def compose_postgres_app(
     package_version: str = "0.1.0",
     contract_version: str = "1.0.0",
     openapi_path: Path | None = None,
+    mutation_pool_min: int = 1,
+    mutation_pool_max: int = 4,
+    mutation_admission_limit: int = 4,
 ) -> FastAPI:
-    """Compose the full PostgreSQL-backed AVA API (F-1-S6 supported path).
+    """Compose the full PostgreSQL-backed AVA API.
 
     Constructs all three repositories (events, grants, cameras) from a single
     DSN, validates the database schema, and wires them into the application.
-    This is the explicit supported composition for production deployments that
-    need the camera soft-delete feature (ADR-19). The returned app has all
-    F-1-S5 + F-1-S6 routes enabled.
+    Also constructs the dedicated async mutation transaction adapter with its
+    own connection pool (separate from the main query pools) for idempotent
+    mutations with bounded admission.
 
     Schema validation: each repository's ``check_schema`` is called during
     composition. A database at an outdated or missing revision raises
@@ -46,10 +50,10 @@ def compose_postgres_app(
     that ``/health/ready`` reports not-ready if the database becomes
     unavailable at runtime.
 
-    Lifecycle: the app owns all three connection pools. They are closed on
-    application shutdown (via the FastAPI lifespan handler) and if any step
-    after repository construction fails (schema check, app creation),
-    already-created pools are cleaned up before the error propagates.
+    Lifecycle: the app owns all connection pools (query + mutation). They are
+    closed on application shutdown (via the FastAPI lifespan handler) and if
+    any step after repository construction fails, already-created pools are
+    cleaned up before the error propagates.
 
     Args:
         dsn: PostgreSQL connection string.
@@ -57,6 +61,11 @@ def compose_postgres_app(
         package_version: Reported by /version.
         contract_version: OpenAPI contract version.
         openapi_path: Optional path to a custom OpenAPI schema file.
+        mutation_pool_min: Minimum connections in the mutation pool (default 1).
+        mutation_pool_max: Maximum connections in the mutation pool (default 4).
+            Must be >= mutation_admission_limit.
+        mutation_admission_limit: Maximum concurrent mutations (default 4).
+            Excess requests are rejected immediately with 409.
 
     Returns:
         Configured FastAPI instance with events, cameras and grants routes enabled.
@@ -64,9 +73,17 @@ def compose_postgres_app(
     Raises:
         RuntimeError: When the database schema is not migrated to the expected
             revision (any of the three repositories fails its check).
+        ValueError: When mutation_admission_limit > mutation_pool_max.
     """
+    if mutation_admission_limit > mutation_pool_max:
+        raise ValueError(
+            f"mutation_admission_limit ({mutation_admission_limit}) must not "
+            f"exceed mutation_pool_max ({mutation_pool_max})"
+        )
+
     from ..persistence.cameras_postgres import PostgresCameraRepository
     from ..persistence.grants_postgres import PostgresGrantRepository
+    from ..persistence.mutation_postgres import PostgresMutationTransaction
     from ..persistence.postgres import PostgresEventSink
 
     def _close_repos(*repos: object | None) -> None:
@@ -75,20 +92,16 @@ def compose_postgres_app(
                 try:
                     repo.close()  # type: ignore[union-attr]
                 except Exception as close_err:  # noqa: BLE001
-                    import logging
-
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "Failed to close %s during cleanup: %s",
                         type(repo).__name__,
                         close_err,
                     )
 
-    # Construct repositories one at a time; close any already-created pool
-    # if a later constructor fails (prevents connection leaks on partial
-    # startup failure).
     event_repo = None
     grant_repo = None
     camera_repo = None
+    mutation_txn = None
     try:
         event_repo = PostgresEventSink(dsn)
         grant_repo = PostgresGrantRepository(dsn)
@@ -96,14 +109,19 @@ def compose_postgres_app(
 
         # Schema validation: reject outdated or unmigrated databases before
         # the app is returned. Each adapter checks alembic_version against
-        # its expected revision (0003 for all three in F-1-S6).
+        # its expected revision.
         event_repo.check_schema()
         grant_repo.check_schema()
         camera_repo.check_schema()
 
+        # Mutation transaction adapter: dedicated async pool.
+        # Opened and verified in the application lifespan.
+        mutation_txn = PostgresMutationTransaction(
+            dsn, pool_min=mutation_pool_min, pool_max=mutation_pool_max
+        )
+
         # Build the app inside the cleanup boundary so that a failure during
-        # app construction (e.g. composition-time invariant check) does not
-        # leak the already-open pools.
+        # app construction does not leak the already-open pools.
         app = create_app(
             AppConfig(
                 package_version=package_version,
@@ -113,6 +131,8 @@ def compose_postgres_app(
                 grant_repository=grant_repo,
                 event_repository=event_repo,
                 camera_repository=camera_repo,
+                mutation_txn=mutation_txn,
+                mutation_admission=MutationAdmission(mutation_admission_limit),
             )
         )
     except Exception:
@@ -139,15 +159,21 @@ def compose_postgres_app(
 
     app.state.readiness_checker.add_contributor(_DbReadinessContributor())
 
-    # Owned lifecycle: close all pools on application shutdown.
+    # Owned lifecycle: open and close all pools on application startup/shutdown.
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
-        _close_repos(event_repo, grant_repo, camera_repo)
+        try:
+            await mutation_txn.open()
+            yield
+        finally:
+            try:
+                await mutation_txn.close()
+            finally:
+                _close_repos(event_repo, grant_repo, camera_repo)
 
-    # Replace the default lifespan with our owned one.
+
     app.router.lifespan_context = lifespan
     return app
 
@@ -161,13 +187,13 @@ class AppConfig:
     openapi_path: Path | None = None
     health_contributors: list[HealthContributor] = field(default_factory=list)
     identity_policy: IdentityPolicy | None = None
-    # F-1-S5 read slice: trusted grants + immutable event source. When both
-    # are set, the /events, /cameras and /grants routes are enabled.
+
     grant_repository: object | None = None
     event_repository: object | None = None
-    # F-1-S6 camera registry: when set, DELETE/GET /cameras/{camera_id}
-    # (admin) is enabled for soft-delete and state inspection.
     camera_repository: object | None = None
+
+    mutation_txn: MutationTransactionFactory | None = None
+    mutation_admission: MutationAdmission | None = None
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
@@ -175,7 +201,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     Args:
         config: Application configuration. Defaults to a minimal config
-            with no health contributors (S2 baseline). When
+            with no health contributors. When
             ``identity_policy`` is set, bearer-token authentication is
             enabled on protected routes.
 
@@ -192,8 +218,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     )
 
     app.add_exception_handler(AuthenticationError, problem_handler)
+    app.add_exception_handler(HTTPException, problem_handler)
 
-    # Composition: construct use cases and attach to app state.
+
     app.state.readiness_checker = ReadinessChecker(cfg.health_contributors)
     app.state.build_info = get_build_info(
         package_version=cfg.package_version,
@@ -202,21 +229,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.state.capability_registry = CapabilityRegistry()
     app.state.identity_policy = cfg.identity_policy
 
-    # Request logging (Authorization header never logged).
+    # Request IDs and logging wrap identifier validation, including rejections.
+    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 
     # Serve the same contract that is distributed with the package.
     app.openapi = lambda: load_schema(cfg.openapi_path)
 
-    # Register routes.
+
     app.include_router(router, prefix="/api/v1")
 
-    # F-1-S6: when grant and event repositories are configured, the camera
-    # registry MUST also be configured (ADR-19). The registry invariant —
-    # every granted camera has a cameras row — is fundamental to the API.
-    # Grant writes without a registry would create cameras absent from the
-    # registry, breaking inventory filtering and state inspection when the
-    # same database is later served through compose_postgres_app.
+    # When grant and event repositories are configured, the camera
+    # registry MUST also be configured.
     if (
         cfg.grant_repository is not None
         and cfg.event_repository is not None
@@ -230,9 +254,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             "CameraRepository implementation."
         )
 
-    # F-1-S6: when a camera registry is configured, the grant repository MUST
-    # support atomic grant + re-activation (ADR-19). Reject configurations
-    # that cannot guarantee this invariant at composition time.
+    # When a camera registry is configured, the grant repository MUST
+    # support atomic grant + re-activation.
     if (
         cfg.camera_repository is not None
         and cfg.grant_repository is not None
@@ -246,18 +269,18 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             "method."
         )
 
-    # F-1-S5 read slice: enable event/camera/grant routes only when both
-    # repositories are supplied (composition root stays ADR-16 clean).
+
     if cfg.grant_repository is not None and cfg.event_repository is not None:
         from .routes_events import router as events_router
 
         app.state.grant_repository = cfg.grant_repository
         app.state.event_repository = cfg.event_repository
-        # F-1-S6: camera registry for admin soft-delete + state inspection.
+
         app.state.camera_repository = cfg.camera_repository
+
+        app.state.mutation_txn = cfg.mutation_txn
+        app.state.mutation_admission = cfg.mutation_admission or MutationAdmission(4)
         app.include_router(events_router, prefix="/api/v1")
-        # Capability reporting (S5): event reads available; evidence
-        # download is intentionally not a capability in this slice.
         from ..application.capabilities import Capability
 
         app.state.capability_registry.register(
