@@ -8,19 +8,42 @@ info:
     Every response carries an X-Request-Id header; a client-supplied canonical
     RFC 4122 UUID is preserved, otherwise AVA generates one. A malformed value
     yields a 400 problem response with a newly generated ID.
+
+    Idempotency (ADR-20): the Idempotency-Key header (RFC 4122 UUID) is
+    required on all routes except /health/live and /health/ready. Missing or
+    malformed keys yield 400. Mutations carry an ETag response header with
+    the resource revision; If-Match enables optimistic concurrency (412 on
+    mismatch). X-Correlation-Id propagates client-supplied trace context or
+    generates a new UUID.
 servers:
   - url: /api/v1
 paths:
   /health/live:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/OptionalIdempotencyKey"
     get:
       operationId: getHealthLive
       summary: Process liveness
       description: No dependency probes; safe for load-balancer health checks.
       security: []
       responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "200":
           description: Process is alive.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -33,15 +56,31 @@ paths:
                     type: string
                     examples: ["alive"]
   /health/ready:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/OptionalIdempotencyKey"
     get:
       operationId: getHealthReady
       summary: API readiness
       description: Reports dependency states without secrets.
       security: []
       responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "200":
           description: Readiness report.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -68,6 +107,9 @@ paths:
                         checked_at:
                           $ref: "#/components/schemas/Instant"
   /version:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: getVersion
       summary: Build and contract version manifest
@@ -77,6 +119,8 @@ paths:
         "200":
           description: Version information.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -94,6 +138,8 @@ paths:
         "401":
           description: Missing or invalid bearer token.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -103,6 +149,8 @@ paths:
         "400":
           description: Malformed X-Request-Id header.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -110,6 +158,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
   /capabilities:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: getCapabilities
       summary: Supported features and bounded limits
@@ -119,6 +170,8 @@ paths:
         "200":
           description: Capability list.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -146,6 +199,8 @@ paths:
         "401":
           description: Missing or invalid bearer token.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -155,6 +210,8 @@ paths:
         "400":
           description: Malformed X-Request-Id header.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -162,6 +219,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
   /events:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: listEvents
       summary: Scoped event collection with cursor pagination
@@ -191,6 +251,8 @@ paths:
         "200":
           description: One page of visible events.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -200,6 +262,8 @@ paths:
         "401":
           description: Missing or invalid bearer token.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -209,6 +273,8 @@ paths:
         "400":
           description: Invalid cursor or page size.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -216,6 +282,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
   /events/{event_id}:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: getEvent
       summary: Single event detail
@@ -232,9 +301,22 @@ paths:
           schema:
             type: string
       responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "200":
           description: The event.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -244,6 +326,8 @@ paths:
         "401":
           description: Missing or invalid bearer token.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -253,6 +337,8 @@ paths:
         "404":
           description: Event missing or not accessible to the caller.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -260,15 +346,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
   /cameras:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: listCameras
       summary: Inventory of cameras visible to the caller
       security:
         - BearerAuth: []
       responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "200":
           description: Visible cameras, sorted by ID.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -278,6 +380,8 @@ paths:
         "401":
           description: Missing or invalid bearer token.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -285,9 +389,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
   /grants/{camera_id}:
-    put:
-      operationId: setGrant
-      summary: Replace the trusted assignment for a camera (admin)
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    get:
+      operationId: getGrant
+      summary: Inspect the current grant and its validator (admin)
       security:
         - BearerAuth: []
       parameters:
@@ -296,6 +403,72 @@ paths:
           required: true
           schema:
             type: string
+      responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "200":
+          description: Current grant and its resource-specific strong validator.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GrantResponse"
+        "404":
+          description: Grant not found.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: Missing authentication or admin role.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+    put:
+      operationId: setGrant
+      summary: Replace the trusted assignment for a camera (admin)
+      description: |
+        Idempotent mutation (ADR-20). Requires Idempotency-Key. Accepts
+        If-Match for optimistic concurrency; returns 412 with the current
+        ETag on mismatch. The response carries an ETag header with the new
+        revision. Retries with the same Idempotency-Key replay the original
+        response without re-executing.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: camera_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -308,15 +481,56 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GrantResponse"
+        "400":
+          description: Missing or malformed Idempotency-Key.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "401":
           description: Missing, invalid token or non-admin caller.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: Idempotency key reused with different request, or request in progress.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "412":
+          description: If-Match does not match the current revision.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/problem+json:
               schema:
@@ -325,10 +539,10 @@ paths:
       operationId: revokeGrant
       summary: Remove the trusted assignment for a camera (admin)
       description: |
-        Hard-deletes the grant row. Grants are safe to remove because events
-        map to the camera row, not the grant row, so revoking a grant never
-        breaks event-to-camera mapping. Use DELETE /cameras/{camera_id} to
-        soft-delete the camera itself (F-1-S6).
+        Idempotent mutation (ADR-20). Requires Idempotency-Key. Returns 204
+        No Content when the grant row existed and was removed, or when no row
+        exists (idempotent no-op). Accepts If-Match for optimistic concurrency;
+        returns 412 with the current ETag on mismatch.
       security:
         - BearerAuth: []
       parameters:
@@ -337,26 +551,66 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
-        "200":
-          description: The (now empty) assignment state.
+        "204":
+          description: Grant removed (or no grant existed). No body.
           headers:
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GrantResponse"
-        "401":
-          description: Missing, invalid token or non-admin caller.
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+        "400":
+          description: Missing or malformed Idempotency-Key.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetail"
+        "401":
+          description: Missing, invalid token or non-admin caller.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: Idempotency key reused with different request, or request in progress.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "412":
+          description: If-Match does not match the current revision.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
   /cameras/{camera_id}:
+    parameters:
+      - $ref: "#/components/parameters/XCorrelationId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     get:
       operationId: getCameraState
       summary: Inspect the full state of a camera (admin)
@@ -373,9 +627,24 @@ paths:
           schema:
             type: string
       responses:
+        "400":
+          description: Invalid request identification or conditional header.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "200":
           description: The full camera state including soft-delete marker.
           headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -385,6 +654,8 @@ paths:
         "401":
           description: Missing, invalid token or non-admin caller.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -394,6 +665,8 @@ paths:
         "404":
           description: No camera row exists for this ID.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -404,12 +677,14 @@ paths:
       operationId: deleteCamera
       summary: Soft-delete a camera (admin)
       description: |
-        Sets ``deleted_at`` on the camera row instead of removing it. The row
-        is retained so that events referencing ``camera_id`` keep a resolvable
+        Idempotent mutation (ADR-20). Requires Idempotency-Key. Sets
+        ``deleted_at`` on the camera row instead of removing it. The row is
+        retained so that events referencing ``camera_id`` keep a resolvable
         target (event-to-camera mapping). The camera becomes invisible to
         inventory and scoping queries until re-activated via grant upsert.
         Returns 204 when an active camera was deleted, 404 when no active
-        camera exists. Admin-only (F-1-S6).
+        camera exists. Accepts If-Match for optimistic concurrency; returns
+        412 with the current ETag on mismatch. Admin-only (F-1-S6).
       security:
         - BearerAuth: []
       parameters:
@@ -418,15 +693,32 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
-          description: Camera soft-deleted successfully.
+          description: Camera soft-deleted successfully. No body.
           headers:
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+        "400":
+          description: Missing or malformed Idempotency-Key.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
         "401":
           description: Missing, invalid token or non-admin caller.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
           content:
@@ -436,8 +728,34 @@ paths:
         "404":
           description: No active camera exists for this ID.
           headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
             X-Request-Id:
               $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "409":
+          description: Idempotency key reused with different request, or request in progress.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "412":
+          description: If-Match does not match the current revision.
+          headers:
+            X-Correlation-Id:
+              $ref: "#/components/headers/XCorrelationId"
+            X-Request-Id:
+              $ref: "#/components/headers/XRequestId"
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/problem+json:
               schema:
@@ -454,6 +772,71 @@ components:
         type: string
         format: uuid
         examples: ["3f2c1b6e-9a4d-4e5f-8b7c-1d2e3f4a5b6c"]
+    XCorrelationId:
+      description: |
+        Correlation ID for distributed tracing. A client-supplied canonical
+        RFC 4122 UUID is preserved and returned; otherwise AVA generates one.
+        Present on every response.
+      schema:
+        type: string
+        format: uuid
+        examples: ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+    ETag:
+      description: |
+        Quoted opaque strong validator specific to the target resource,
+        its representation version and revision. Obtain a grant validator
+        from grant GET/PUT and a camera validator from camera GET. Successful
+        DELETE responses omit ETag. Clients must not interpret tag contents.
+      schema:
+        type: string
+        examples: ['"0b01f567663dc137defa6128801b494e"']
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated RFC 4122 UUID for idempotent mutation replay.
+        Required on all routes except /health/live and /health/ready.
+        Missing or malformed keys yield 400. Reads use the key only for
+        identification. Mutations retain successful results for one hour;
+        matching retries replay the result, and changed requests using the
+        same key return 409. Scope is authenticated tenant and subject.
+        Uppercase and lowercase canonical hyphenated UUIDs are accepted.
+      schema:
+        type: string
+        format: uuid
+        examples: ["f47ac10b-58cc-4372-a567-0e02b2c3d479"]
+    OptionalIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Optional on health probes; canonical UUID required when supplied.
+      schema:
+        type: string
+        format: uuid
+    XCorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Canonical UUID; generated when absent, normalized to lowercase, rejected with 400 when malformed.
+      schema:
+        type: string
+        format: uuid
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Strong validator from a previous ETag response. When supplied, the
+        mutation proceeds only if a strong tag matches the current target
+        representation; lists of quoted tags and * are supported. Wildcard
+        requires an existing target. Weak tags never strongly match. False
+        conditions yield 412 unless a normal error such as 404 takes precedence.
+        Matching completed idempotency replay precedes current-state checks.
+      schema:
+        type: string
+        examples: ['"0b01f567663dc137defa6128801b494e"']
   securitySchemes:
     BearerAuth:
       type: http

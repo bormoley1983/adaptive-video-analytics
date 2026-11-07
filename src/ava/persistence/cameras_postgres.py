@@ -1,21 +1,4 @@
-"""PostgreSQL adapter for the trusted static-camera registry (F-1-S6).
-
-Implements the provider-independent :class:`CameraRepository` port over the
-``cameras`` table (alembic revision 0003) and provides the admin write path
-used by the camera delete endpoint. Reads return the *current* state per
-camera so policy is re-evaluated on every request; no caching assumptions.
-
-Soft-delete: ``delete_camera`` sets ``deleted_at`` on the row instead of
-removing it. Deleted rows are invisible to :meth:`get_camera` and
-:meth:`list_cameras` but retained so that events referencing ``camera_id``
-keep a resolvable target (event-to-camera mapping). Only
-:meth:`find_camera_by_camera_id` returns soft-deleted rows (for admin
-inspection via ``GET /cameras/{camera_id}``).
-
-Grants are independently revocable via hard delete on
-:class:`PostgresGrantRepository`; they are safe to remove because the camera
-row, not the grant row, is what events map to.
-"""
+"""PostgreSQL camera registry with grant-independent soft deletion."""
 
 from __future__ import annotations
 
@@ -25,24 +8,25 @@ from psycopg import errors as pg_errors
 from psycopg_pool import ConnectionPool
 
 from ..application.access import Camera
+from .mutation_postgres import lock_camera
 
 logger = logging.getLogger(__name__)
 
 _SELECT_CAMERA_SQL = """
-SELECT camera_id, site_id, deleted_at, updated_at
+SELECT camera_id, site_id, deleted_at, updated_at, revision
 FROM cameras
 WHERE camera_id = %s AND deleted_at IS NULL
 """
 
 _SELECT_ALL_CAMERAS_SQL = """
-SELECT camera_id, site_id, deleted_at, updated_at
+SELECT camera_id, site_id, deleted_at, updated_at, revision
 FROM cameras
 WHERE deleted_at IS NULL
 ORDER BY camera_id
 """
 
 _SELECT_CAMERA_INCLUDE_DELETED_SQL = """
-SELECT camera_id, site_id, deleted_at, updated_at
+SELECT camera_id, site_id, deleted_at, updated_at, revision
 FROM cameras
 WHERE camera_id = %s
 """
@@ -53,18 +37,29 @@ VALUES (%s, %s, NULL, now())
 ON CONFLICT (camera_id) DO UPDATE
 SET site_id = EXCLUDED.site_id,
     deleted_at = NULL,
-    updated_at = now()
+    updated_at = now(),
+    revision = cameras.revision + 1
 """
 
 _SOFT_DELETE_CAMERA_SQL = """
-UPDATE cameras SET deleted_at = now(), updated_at = now()
+UPDATE cameras SET deleted_at = now(), updated_at = now(), revision = revision + 1
 WHERE camera_id = %s AND deleted_at IS NULL
+"""
+
+_SELECT_REVISION_SQL = """
+SELECT revision FROM cameras WHERE camera_id = %s
+"""
+
+_INCREMENT_REVISION_SQL = """
+UPDATE cameras SET revision = revision + 1, updated_at = now()
+WHERE camera_id = %s
 """
 
 
 def _row_to_camera(row: tuple) -> Camera:
-    """Convert a (camera_id, site_id, deleted_at, updated_at) row to a Camera."""
+    """Convert a (camera_id, site_id, deleted_at, updated_at, revision) row to a Camera."""
     camera_id, site_id, deleted_at, updated_at = row[0], row[1], row[2], row[3]
+    revision = row[4] if len(row) > 4 else 1
     if not isinstance(camera_id, str) or not camera_id:
         raise ValueError(f"missing camera_id in row: {row!r}")
     if site_id is not None and (not isinstance(site_id, str) or not site_id):
@@ -76,13 +71,14 @@ def _row_to_camera(row: tuple) -> Camera:
         site_id=site_id,
         deleted_at=deleted_iso,
         updated_at=updated_iso,
+        revision=revision,
     )
 
 
 class PostgresCameraRepository:
     """CameraRepository over PostgreSQL; also exposes the admin write path."""
 
-    EXPECTED_REVISION = "0003"
+    EXPECTED_REVISION = "0004"
 
     def __init__(self, dsn: str, *, pool_min: int = 1, pool_max: int = 4) -> None:
         self._dsn = dsn
@@ -140,11 +136,13 @@ class PostgresCameraRepository:
     def upsert_camera(self, camera_id: str, site_id: str | None) -> None:
         """Create or re-activate a camera row (admin)."""
         with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
             conn.execute(_UPSERT_CAMERA_SQL, (camera_id, site_id))
 
     def delete_camera(self, camera_id: str) -> bool:
         """Soft-delete the camera for *camera_id*. True if an active row existed."""
         with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
             cur = conn.execute(_SOFT_DELETE_CAMERA_SQL, (camera_id,))
             return cur.rowcount > 0
 
@@ -157,6 +155,27 @@ class PostgresCameraRepository:
         if row is None:
             return None
         return _row_to_camera(row)
+
+    def get_revision(self, camera_id: str) -> int | None:
+        """Return the current revision for *camera_id*, or None if no row exists."""
+        with self._pool.connection() as conn:
+            row = conn.execute(_SELECT_REVISION_SQL, (camera_id,)).fetchone()
+        return row[0] if row is not None else None
+
+    def increment_revision(self, camera_id: str) -> int:
+        """Atomically increment and return the new revision.
+
+        Must be called within the mutation transaction for full atomicity;
+        this convenience method opens its own transaction. Raises ValueError
+        if the camera row does not exist.
+        """
+        with self._pool.connection() as conn, conn.transaction():
+            lock_camera(conn, camera_id)
+            cur = conn.execute(_INCREMENT_REVISION_SQL, (camera_id,))
+            if cur.rowcount == 0:
+                raise ValueError(f"camera {camera_id!r} does not exist")
+            row = conn.execute(_SELECT_REVISION_SQL, (camera_id,)).fetchone()
+            return row[0]
 
     def close(self) -> None:
         self._pool.close()

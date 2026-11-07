@@ -143,3 +143,9 @@ Loki, Grafana or Prometheus failure must not stop analytics: the runtime has
 no dependency on any of them (B-021). Stop any subset with
 `docker compose -f ops/docker-compose.yml stop loki grafana` and verify a live
 run still completes.
+
+## Isolated infrastructure checks
+
+Run `make test-infra` with Docker Engine and Compose available. The suite creates a uniquely named disposable copy of the ops project, including PostgreSQL, with test-only credentials, private volumes/configuration and dynamically assigned loopback ports. It does not require or modify `ops/.env` or start, stop or restart the shared `ava-ops` deployment. Configuration is rendered before startup; partial setup failures also trigger cleanup of test-owned resources. Alloy discovery is restricted to the test project.
+
+Full Compose diagnostics are saved under `results/infra/<project>/`, or `AVA_TEST_EVIDENCE_DIR/<project>/` when supplied. Tests cover database connectivity, health, loopback exposure, metrics, log submission, outage isolation and persistence across restart. Runtime configuration is disposable; preserve evidence and recovery artifacts separately. An unavailable Docker runtime is reported as skipped, not passed.

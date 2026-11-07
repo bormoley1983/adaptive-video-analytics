@@ -164,22 +164,23 @@ contributors default to required when the attribute is absent.
 
 ## Event and camera reads (grant-scoped)
 
-When the app is constructed with both a grant repository and an event
-repository, three read endpoints and one admin write are enabled:
-`GET /api/v1/events` (cursor-paginated, stable global order),
-`GET /api/v1/events/{event_id}`, `GET /api/v1/cameras`, and the admin-only
-`PUT`/`DELETE /api/v1/grants/{camera_id}`. Access is grant-based: a caller
-sees a camera's history only while a current trusted grant covers their
-tenant and passes their site restriction; revocation removes access on the
-next read. Events are neutral — no tenant field, no local paths or RTSP
-URLs; evidence is reported as kind only. Missing, ungranted or
-site-invisible events return 404 without leaking existence.
+When the app is constructed with event, grant and camera repositories, it enables cursor-paginated event reads, camera inventory, and admin inspection of camera state and grants. Admin grant PUT, grant DELETE and camera DELETE require a conforming mutation transaction factory. Access is grant-based: a caller sees a camera's history only while a current trusted grant covers their tenant and passes their site restriction; revocation removes access on the next read. Events expose evidence kind without internal paths or source URLs. Missing or inaccessible events return 404 without leaking existence.
 
 The event API requires event, grant and camera repositories together. Existing
 callers that construct `AppConfig` with only event and grant repositories must
 also provide a camera repository. For PostgreSQL, `compose_postgres_app(dsn,
 identity_policy=...)` constructs and validates all three repositories and
-closes their pools when the app shuts down. Apply Alembic migration 0003 before
+closes their pools when the app shuts down. Apply Alembic migration 0004 before
 starting the updated service. Camera deletion hides the camera from inventory;
 its event history remains accessible according to current grants and site
 restrictions. Grant replacement creates or reactivates the camera atomically.
+
+## Request identification and mutation retries
+
+All non-probe API requests require a client-generated canonical UUID `Idempotency-Key`; health probes may omit it but validate supplied keys. Reads use it for identification only. Optional `X-Correlation-Id` is generated when absent and returned in responses; malformed values return 400. Both headers accept uppercase or lowercase hex and normalize internally. `X-Request-Id` identifies each HTTP attempt.
+
+Grant PUT and both DELETE operations atomically store successful results with their mutations for one hour. Retry the same operation with the same key and unchanged request, including `If-Match`; different requests reusing the key return 409. After expiry an operation may execute again. Authentication and current authorization apply to every replay. Applications without a conforming mutation transaction factory reject writes rather than bypassing these guarantees; `compose_postgres_app` supplies the PostgreSQL factory.
+
+Admin GETs for `/api/v1/grants/{camera_id}` and `/api/v1/cameras/{camera_id}` return distinct opaque ETags. Supply the target resource's tag in optional `If-Match` to prevent stale updates; tag lists and `*` are supported. Grant PUT returns its updated ETag. Successful DELETE responses return 204 without ETags; an absent grant and an already-soft-deleted camera are successful no-ops, while an unknown camera returns 404. Camera deletion preserves grants and historical access.
+
+Mutation transactions use a separate async pool (default maximum four connections) with immediate bounded admission and five-second lock timeouts; contention or exhausted admission returns 409. Request logs contain identifiers, method, route template, status and duration, with no request bodies or credentials.
