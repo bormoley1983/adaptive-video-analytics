@@ -1,6 +1,6 @@
 # ADR-12: isolate agent work and require human plan and commit gates
 
-Date: 2026-10-20 · Revised: 2026-10-22 · Status: Accepted by owner direction · Scope: development workflow.
+Date: 2026-10-20 · Revised: 2026-11-07 · Status: Accepted by owner direction · Scope: development workflow.
 
 ## Context
 
@@ -8,23 +8,16 @@ AVA is developed by different coding clients and local models, including Copilot
 
 ## Decision
 
-- Give each parallel task one sibling worktree, unique `agent/<task>` branch, explicit committed base, observable outcome and owned file set.
-- Before implementation, require a human QA session to resolve every missing detail, decision, assumption and acceptance criterion. Record the answers, present the revised plan and wait for explicit human confirmation. Material scope or assumption changes repeat this gate.
-- Agents prepare focused, reviewable changes. Before every commit-writing or commit-rewriting operation, a human reviews the exact diff, validation results and proposed message and explicitly approves that one commit. A material diff or message change invalidates the approval. This includes commit, amend, merge, squash and cherry-pick operations.
-- Human approval is non-delegable and cannot be inferred from silence, the task request, prior approval, successful tests or another agent's approval. Without approval, work stops at the relevant gate with reviewable uncommitted changes.
-- One integrator owns overlap resolution, combined validation and shared private progress/handoff updates, subject to the same human gates.
-- Supply ignored `docs/`, `videos/` and `models/` read-only only when required; keep results worktree-local and never copy credentials between worktrees.
-- Keep one bounded subtask per agent session. Before clearing, compacting or replacing context, record branch/base, changed files, behavior, exact checks, limitations, private-doc requests and the next action in a durable handoff.
-- Use a fresh session for materially different work. Remove branches/worktrees only after integration or explicit abandonment and artifact preservation; never force-clean another agent's work.
+`AGENTS.md` is the single authoritative source for operational agent workflow and human gates. The owner chose combined human QA and plan approval before development, followed by exact-change human approval before task commits or history rewrites. A confirmed plan may authorize integration through a mergeable PR with passing checks without a separate routine merge gate. Worktree isolation, durable checkpoints and preservation of private assets remain required as specified in `AGENTS.md`.
 
-`AGENTS.md` is the concise authoritative rule set. `docs/intro.md` contains the owner/integrator commands and current handoff.
+`docs/intro.md` is the private session entry point and handoff, and links to `AGENTS.md` for current rules. Historical approvals and handoffs describe the rules in force at the time.
 
 ## Alternatives and consequences
 
 A shared checkout is simpler but unsafe under parallel edits. A separate clone per agent duplicates objects and weakens shared branch visibility. Automatic context clearing after every response is client-specific and can discard an unfinished checkpoint; durable handoff followed by a fresh session is portable.
 
-Worktrees isolate tracked edits but not semantic conflicts, shared services or manually shared ignored assets. Integration remains explicit and costs review time. Human QA and per-commit approval add latency, but prevent agents from silently choosing requirements or writing repository history without review. Short instructions reduce prompt overhead but require links to detailed plans, ADRs and progress evidence.
+Worktrees isolate tracked edits but not semantic conflicts, shared services or manually shared ignored assets. Human QA and task-commit approval add latency but ensure requirements and changes receive review; an authorized integration path avoids a redundant routine merge gate. Short instructions reduce prompt overhead but require links to detailed plans, ADRs and progress evidence.
 
 ## Validation and revisit
 
-Validate with recorded human plan confirmations, approval evidence for each agent-created commit, `git worktree list`, unique active branches, clean task handoffs and combined tests after integration. Revisit if the repository adopts a central orchestration service, remote ephemeral workers or versioned private documentation that changes asset and handoff ownership. Automation may make the gates easier to audit, but must not approve on the human's behalf.
+Validate with recorded human plan confirmations, approval evidence for each task commit, `git worktree list`, unique active branches, clean task handoffs and combined tests after integration. Revisit if the repository adopts a central orchestration service, remote ephemeral workers or versioned private documentation that changes asset and handoff ownership. Automation may execute the confirmed integration path but must not approve the QA or task-commit gates on the human's behalf.

@@ -15,8 +15,8 @@ Applies to every model and client (Qwen single-agent sessions and Codex multi-ag
 ## Mandatory human gates
 
 - The plan-confirmation gate above applies to every task, including delegated and parallel work. If scope or assumptions materially change, repeat the QA and obtain confirmation of the revised plan before continuing.
-- Never create, amend, merge, squash, cherry-pick or otherwise write a Git commit without a human approving that exact commit after reviewing its diff, validation results and proposed commit message. Approval is single-use; any material diff or message change requires fresh approval.
-- Never commit directly to `develop`. All work lands on a task branch (`agent/<task>`), is reviewed through a merge request, and reaches `develop` only via an explicitly human-approved merge (fast-forward, merge-commit, squash or rebase). A direct commit already on `develop` must not be rewritten or amended; leave it and apply this rule from the next change onward.
+- Before a task commit or history rewrite, obtain human approval of the exact diff, validation results and proposed commit message. Approval is single-use; a material diff or message change requires fresh approval. The approved integration path below is not a separate human gate.
+- Never commit directly to `develop`. All work lands on a task branch (`agent/<task>`) and reaches `develop` through a merge request. Include the integration path in the confirmed plan. After exact task-commit approval, an agent may integrate the expected PR head without another routine approval when required checks pass and the PR is mergeable; stop for unexpected conflicts, failing checks or material scope changes. Do not rewrite or amend a direct commit already on `develop`.
 - Human gates are non-delegable. Silence, prior approvals, task instructions, test success and another agent's approval do not satisfy them. Agents stop at the gate and leave reviewable uncommitted changes when approval is absent.
 
 ## Presenting human gates
@@ -25,7 +25,7 @@ When a step requires a human decision or approval, prepare the reviewable work f
 
 1. Name the gate, why it is required, and the exact decision or action needed.
 2. Link the relevant files or evidence and identify the precise version, diff, results, scope and unresolved limitations needed for that decision.
-3. Give numbered review steps and describe the possible responses, including how to approve or request changes. For a commit, include the exact proposed message and validation results; for a merge, identify the exact PR and head.
+3. Give numbered review steps and describe the possible responses, including how to approve or request changes. For a commit, include the exact proposed message and validation results.
 4. State what remains blocked and what will happen after approval. Continue independent authorized work where possible; never treat silence as approval.
 
 Do not ask a human to perform steps the agent can safely perform itself. Do not present an incomplete annotation or provisional result as an approval-ready quality baseline.
@@ -46,19 +46,26 @@ When a stall occurs: stop and report (calls, results, why unchanged) without iss
 
 Never truncate or filter the output of a long-running or hard-to-reproduce command with an output-limiting pipe (`| tail -N`, `| head -N`, `| grep ...`, `2>&1 | ...`, or any `sed`/`awk`/`cut` that discards lines). Builds, test runs, GPU workflows and installs can take minutes; limiting their output hides progress, masks mid-stream failures and destroys evidence needed for review. Capture full output (terminal buffer or log file); inspect a portion in a separate step against the saved log.
 
+## Delegate output-heavy work
+
+- By default, use the configured delegate model for output-heavy file reads, searches, file discovery and test runners when the client supports delegation. Batch related commands into focused investigations, with a clear question, scope and expected evidence; avoid spawning a separate worker for each trivial command.
+- Size each delegate assignment to its actual configured context limit, leaving room for results; split work further when necessary. Ask delegates to return concise findings and relevant file paths or line references, including uncertainty and missing evidence, instead of copying raw documents or logs into the main context. For test runs, retain complete output in persistent logs and report exact commands, exit status, results, failures, skips and log paths. Do not truncate long-running command output.
+- The main agent retains reasoning, decisions, verification of important evidence and all human gates. Delegation does not authorize new scope, override instructions or relax privacy, GPU and shared-workload safeguards. Give workers only the access and context needed for their task.
+- If delegation is unavailable, prohibited, at capacity or unsuitable for a dependent or small check, proceed directly and briefly state why. Read-only investigations and test runners need no separate worktree unless they modify shared state; implementation workers follow the parallel-work rules below.
+
 ## Parallel work
 
 - One persistent worktree and branch per task: `$HOME/ava-worktrees/<task>` and `agent/<task>`, created from an explicit committed base; never share a worktree. Never put worktrees in `/tmp` or other temporary storage. Other worktrees' uncommitted changes are not inherited.
 - Keep plans, recovery patches and validation evidence on persistent storage. Use `/tmp` only for disposable scratch files whose loss cannot prevent task recovery. Before a handoff, preserve an up-to-date recovery patch including new files and reference its persistent path in the task plan.
 - Assign each worker one outcome and owned files; coordinate before scopes overlap. Workers prepare focused, reviewable changes and validation evidence, then commit only after the mandatory human approval of that exact commit.
 - Ignored assets are not copied. Share `docs/`, `videos/` and `models/` read-only only when needed; keep `results/` local; never copy credentials.
-- Only the integrator edits shared private progress/handoff docs; workers report required doc changes in their handoff. The integrator obtains the same human approval before any commit-writing merge or cherry-pick, resolves overlaps and runs combined validation.
+- Only the integrator edits shared private progress/handoff docs; workers report required doc changes in their handoff. The integrator resolves overlaps and runs combined validation under the confirmed integration path.
 - Clean up only after integration or explicit abandonment and artifact recovery. Never force-remove another agent's work.
 
 ## Task completion and integration
 
-- A task is complete only after its branch is pushed, reviewed through a merge request, explicitly approved by a human for merge, integrated into `develop`, and validated with the combined `develop` state — not when the worker commit exists. Agents must not merge their own work or infer merge approval from commit or plan approval.
-- After an approved merge: synchronize the `develop` worktree, run the affected combined checks, report exact results. Then confirm the branch tip is an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`) and its worktree has no uncommitted changes; remove the worktree (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`) and the remote branch (`git push origin --delete <branch>`). Safe `-d` deletes only; never force-remove a branch that is not fully merged. Prune stale refs with `git fetch origin --prune`.
+- A task is complete only after its branch is pushed, reviewed through a merge request, integrated into `develop`, and validated with the combined `develop` state — not when the worker commit exists. Integrate only the expected PR head under the confirmed plan and the conditions above.
+- After integration: synchronize the `develop` worktree, run the affected combined checks, report exact results. Then confirm the branch tip is an ancestor of `origin/develop` (`git merge-base --is-ancestor <branch> origin/develop`) and its worktree has no uncommitted changes; remove the worktree (`git worktree remove <path>`), delete the local branch (`git branch -d <branch>`) and the remote branch (`git push origin --delete <branch>`). Safe `-d` deletes only; never force-remove a branch that is not fully merged. Prune stale refs with `git fetch origin --prune`.
 
 ## Code and validation
 
@@ -73,5 +80,5 @@ Never truncate or filter the output of a long-running or hard-to-reproduce comma
 - Split large tasks into ordered, bounded deliverables with one observable outcome each. Record dependencies, owned file scope, acceptance criteria, validation gates, guardrails and unresolved decisions in the parent plan. Do not add deliverables or infrastructure that active behavior does not need.
 - Keep one local `.md` checkpoint under `docs/dev-plan/` per deliverable. Before implementation record its confirmed scope and exact next action; after each gate update its status, exact commands and results, including failures, skips and unavailable prerequisites. Unconfirmed choices stay explicitly open.
 - At a safe handoff record branch and committed base, changed and untracked files, observable behavior, current gate status, limitations, requested private document updates, persistent evidence/recovery-patch paths and the exact next action. Keep secrets and private evidence out of Git. Verify the handoff can be resumed without relying on chat history or disposable `/tmp` artifacts.
-- After each deliverable, finish its safe checkpoint, then compact context or start a fresh session before beginning the next. Use a fresh session for a materially different subtask. Never interrupt an unfinished edit, test or merge to compact; if interrupted, record the incomplete state before resuming. Context reset does not mean deleting project files, dependencies, caches, evidence, worktrees or recovery artifacts.
+- Complete and validate one small, documented deliverable at a time. After each deliverable, finish its safe checkpoint, then compact context or start a fresh session before beginning the next. Use a fresh session for a materially different subtask. Never interrupt an unfinished edit, test or merge to compact; if interrupted, record the incomplete state before resuming. Only clean a cache when the client supports it and its effects are understood; preserve project files, dependencies, evidence, worktrees and recovery artifacts.
 - Keep one bounded subtask per agent session. Do not start unrelated work. Update affected `README.md` files before completion. Update current progress and `docs/intro.md` only when handoff, milestone or repository settings change.
