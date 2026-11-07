@@ -2,11 +2,7 @@
 
 ## Summary
 
-YOLOE-26s-seg exports to ONNX and TensorRT successfully. A custom DeepStream
-parser correctly decodes the detection head output. Different prompt sets
-produce structurally different models (different channel counts), confirming
-the ADR-3 immutability contract: classes are baked in at export time and
-cannot be changed at runtime.
+YOLOE-26s-seg exports to ONNX and TensorRT successfully. A custom DeepStream parser correctly decodes the detection head output. Different prompt sets produce structurally different models (different channel counts), confirming the ADR-3 immutability contract: classes are baked in at export time and cannot be changed at runtime.
 
 ## Export
 
@@ -40,25 +36,15 @@ Width = `4 + N_prompts + 32` (box coords + per-prompt class scores + prototype w
 
 ## Class-Change Behavior
 
-1. **Different prompt sets → different models.** Exporting with 3 prompts
-   instead of 5 changes the output tensor width from 41 to 39 channels.
-   The models are structurally incompatible; a parser written for one
-   cannot parse the other without recompilation.
+1. **Different prompt sets → different models.** Exporting with 3 prompts instead of 5 changes the output tensor width from 41 to 39 channels. The models are structurally incompatible; a parser written for one cannot parse the other without recompilation.
 
-2. **Runtime mutation rejected.** Calling `model.set_classes(...)` on an
-   already-exported ONNX model raises `AssertionError`. This confirms the
-   ADR-3 contract: "YOLOE static exports bake in classes and reject runtime
-   class/visual-prompt changes."
+2. **Runtime mutation rejected.** Calling `model.set_classes(...)` on an already-exported ONNX model raises `AssertionError`. This confirms the ADR-3 contract: "YOLOE static exports bake in classes and reject runtime class/visual-prompt changes."
 
-3. **Profile identity.** Each prompt set produces a distinct engine file.
-   Versioning is by filename (e.g., `yoloe-26s-seg-det-only.engine` for the
-   5-prompt set). Rollback = restore the previous engine file. No shared
-   state between profiles.
+3. **Profile identity.** Each prompt set produces a distinct engine file. Versioning is by filename (e.g., `yoloe-26s-seg-det-only.engine` for the 5-prompt set). Rollback = restore the previous engine file. No shared state between profiles.
 
 ## DeepStream Pipeline Validation
 
-**Result: PASS.** Custom parser `NvDsInferParseCustomYoloE` correctly
-decodes the `[1,41,8400]` detection tensor in a full DeepStream 9.2 pipeline.
+**Result: PASS.** Custom parser `NvDsInferParseCustomYoloE` correctly decodes the `[1,41,8400]` detection tensor in a full DeepStream 9.2 pipeline.
 
 - **Video:** crosswalk-day-pedestrians.mp4 (1768 frames, 1920×1080)
 - **Detections:** 1768 JSONL records written (one per frame)
@@ -80,11 +66,7 @@ decodes the `[1,41,8400]` detection tensor in a full DeepStream 9.2 pipeline.
 
 ### Root Cause of Initial Failure
 
-The custom parser was never invoked because the video file
-(`/tmp/crosswalk.mp4`) was absent from the container. Without a valid source,
-nvinfer never received inference buffers and the parse function was never
-called. No error was logged for the missing custom library — the pipeline
-simply produced no detections.
+The custom parser was never invoked because the video file (`/tmp/crosswalk.mp4`) was absent from the container. Without a valid source, nvinfer never received inference buffers and the parse function was never called. No error was logged for the missing custom library — the pipeline simply produced no detections.
 
 ## Artifacts
 

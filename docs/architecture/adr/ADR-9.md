@@ -6,14 +6,7 @@ Date: 2026-10-20 · Revised: 2026-10-23 · Status: External reuse retained for i
 
 The owner reports existing external instances of PostgreSQL 18 with pgvector, Redis, Kafka, ELK, MongoDB, RabbitMQ, Qdrant, n8n, SeaweedFS S3 and Prometheus. Availability is inventory supplied by the owner, not a successful connectivity test. Versions other than PostgreSQL's major version, endpoints and credentials are not yet supplied.
 
-Run AVA components in containers and connect to these services when required by
-external integration. [ADR-15](ADR-15.md) supersedes the earlier no-duplicate
-rule for the local study environment: AVA now owns a bounded local PostgreSQL,
-Prometheus/Grafana and Loki/Alloy Compose stack so its lifecycle and failures can
-be learned safely. This does not authorize changes to shared services or imply
-that every available product is an AVA requirement. External component/client
-selection must respect the existing service APIs and operator-controlled
-upgrade schedule.
+Run AVA components in containers and connect to these services when required by external integration. [ADR-15](ADR-15.md) supersedes the earlier no-duplicate rule for the local study environment: AVA now owns a bounded local PostgreSQL, Prometheus/Grafana and Loki/Alloy Compose stack so its lifecycle and failures can be learned safely. This does not authorize changes to shared services or imply that every available product is an AVA requirement. External component/client selection must respect the existing service APIs and operator-controlled upgrade schedule.
 
 | Existing service | Proposed AVA role / activation point |
 |---|---|
@@ -29,11 +22,7 @@ upgrade schedule.
 | Qdrant | Available vector search alternative; evaluate against pgvector only for a defined retrieval workload |
 | n8n | Optional downstream automation consuming published events; keep outside inference/rule correctness and critical latency paths |
 
-These are planned external roles, not configured connections. RabbitMQ jobs and
-Kafka event streams have distinct potential purposes; avoid duplicating
-publication unless a consumer requirement calls for it. No vector database,
-Redis, MongoDB or automation workflow is required for the current local stack.
-ADR-15 records their explicit revisit criteria.
+These are planned external roles, not configured connections. RabbitMQ jobs and Kafka event streams have distinct potential purposes; avoid duplicating publication unless a consumer requirement calls for it. No vector database, Redis, MongoDB or automation workflow is required for the current local stack. ADR-15 records their explicit revisit criteria.
 
 ## Configuration and ownership
 

@@ -37,28 +37,10 @@ Fast unit feedback stays independent of GPU availability. Integration, end-to-en
 
 Run `make help`, `make test-unit`, each applicable higher-level suite, `make test-coverage` and `make lint`. Record commands, environment and actual outcomes; never infer one level from another. Revisit the tool choice if pytest markers no longer express the deployment topology, but preserve the four confidence levels and explicit coverage gate.
 
-The 2026-10-20 audit could not run host `make test-unit` because the system
-Python lacks pytest. In the existing runtime image with pytest installed, all
-85 selected tests passed, but combined line/branch coverage was 68.39% and the
-100% gate failed. Ruff 0.17.1 reported 44 findings. B-018 tracks restoration of
-the accepted gate; these results are not a pass and do not invalidate the
-passing behavioral tests.
+The 2026-10-20 audit could not run host `make test-unit` because the system Python lacks pytest. In the existing runtime image with pytest installed, all 85 selected tests passed, but combined line/branch coverage was 68.39% and the 100% gate failed. Ruff 0.17.1 reported 44 findings. B-018 tracks restoration of the accepted gate; these results are not a pass and do not invalidate the passing behavioral tests.
 
 ## Narrow coverage exceptions
 
-Hardware-only or third-party paths that cannot be exercised deterministically in
-the unit/integration gate are excluded only by name, with the nearest owned
-boundary validated instead. No broad exclusion or lowered `fail_under` is used.
+Hardware-only or third-party paths that cannot be exercised deterministically in the unit/integration gate are excluded only by name, with the nearest owned boundary validated instead. No broad exclusion or lowered `fail_under` is used.
 
-- **`ava/detector.py` — model weight loading and inference.** The `load()`
-  methods of `ConventionalDetector` and `PromptedDetector` (and the abstract
-  `Detector.load`/`detect` stubs) construct real ultralytics `YOLO` models from
-  multi-hundred-MB weights and warm a CUDA context. Direct execution is
-  impractical in the unit gate: it requires GPU, model assets and network-free
-  weight placement, which belong to the e2e/infra suites. The nearest owned
-  boundary — mapping raw ultralytics-style results to normalised `Detection`
-  records, device resolution (`_resolve_device`), and the load-required
-  assertion — is validated by `tests/test_detector.py`. Real inference confidence
-  is supplied by the E-1 benchmark runs (`benchmarks/e-1/report.md`) and the e2e
-  suite. The uncovered lines are therefore the weight-loading/inference bodies,
-  not owned logic.
+- **`ava/detector.py` — model weight loading and inference.** The `load()` methods of `ConventionalDetector` and `PromptedDetector` (and the abstract `Detector.load`/`detect` stubs) construct real ultralytics `YOLO` models from multi-hundred-MB weights and warm a CUDA context. Direct execution is impractical in the unit gate: it requires GPU, model assets and network-free weight placement, which belong to the e2e/infra suites. The nearest owned boundary — mapping raw ultralytics-style results to normalised `Detection` records, device resolution (`_resolve_device`), and the load-required assertion — is validated by `tests/test_detector.py`. Real inference confidence is supplied by the E-1 benchmark runs (`benchmarks/e-1/report.md`) and the e2e suite. The uncovered lines are therefore the weight-loading/inference bodies, not owned logic.

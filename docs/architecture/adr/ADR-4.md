@@ -16,13 +16,6 @@ Free-form natural language for all rules would obscure testable semantics. Frame
 
 ## Validation and revisit
 
-E-2 deterministic fixtures cover direction, finite lines, jitter, sparse/missing
-frames, re-entry, grace expiry, first observation inside and clock resets. The
-real clip demonstrated line and zone events. Full conformance is not complete:
-ingest derives time from frame index/FPS rather than source PTS, discontinuity
-does not allocate a new session identity, and polygon validation does not reject
-self-intersection or zero area (B-013/B-014).
+E-2 deterministic fixtures cover direction, finite lines, jitter, sparse/missing frames, re-entry, grace expiry, first observation inside and clock resets. The real clip demonstrated line and zone events. Full conformance is not complete: ingest derives time from frame index/FPS rather than source PTS, discontinuity does not allocate a new session identity, and polygon validation does not reject self-intersection or zero area (B-013/B-014).
 
-E-3 must replay the same cases and report semantic/tracker differences. Revisit
-for unattended-object association, calibration, cross-camera identity or hot
-reload; record new semantics before implementation.
+E-3 must replay the same cases and report semantic/tracker differences. Revisit for unattended-object association, calibration, cross-camera identity or hot reload; record new semantics before implementation.

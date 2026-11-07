@@ -2,39 +2,15 @@
 
 Technology overview and versioning specification: [STACK.md](STACK.md).
 
-AVA is an independent, free/self-hosted video-analytics learning project. Its
-mission is to build useful low-cost analytics, measure real capability and
-throughput on homelab hardware, and use the work to strengthen practical video
-analytics, IT, software-development and architecture skills. The repository is
-also a proving ground for disciplined, human-gated agent-driven development.
+AVA is an independent, free/self-hosted video-analytics learning project. Its mission is to build useful low-cost analytics, measure real capability and throughput on homelab hardware, and use the work to strengthen practical video analytics, IT, software-development and architecture skills. The repository is also a proving ground for disciplined, human-gated agent-driven development.
 
-The implemented study paths include a single-camera offline proof of concept
-and a provisional multi-camera RTSP runner. Both support a **conventional**
-detector (YOLO26n + ByteTrack) or a **text-prompted** detector (YOLOE-26 small),
-plus line-crossing, zone-entry and dwell rules. The live runner separates decode
-from analysis with bounded per-camera queues and source-time pacing.
+The implemented study paths include a single-camera offline proof of concept and a provisional multi-camera RTSP runner. Both support a **conventional** detector (YOLO26n + ByteTrack) or a **text-prompted** detector (YOLOE-26 small), plus line-crossing, zone-entry and dwell rules. The live runner separates decode from analysis with bounded per-camera queues and source-time pacing.
 
-The E-3 capacity result remains provisional: the original sweep completed, but
-its pacing and queue instrumentation prevented a valid stable-capacity claim.
-DeepStream compatibility, the local observability stack and replay harness have
-measured evidence; databases and the product API/UI remain later work. See
-`docs/` (mostly private, not in Git) for planning and progress; the stable
-architecture ADRs and test rules are committed under `docs/architecture/` and
-`docs/tests_rules.md`.
+The E-3 capacity result remains provisional: the original sweep completed, but its pacing and queue instrumentation prevented a valid stable-capacity claim. DeepStream compatibility, the local observability stack and replay harness have measured evidence; databases and the product API/UI remain later work. See `docs/` (mostly private, not in Git) for planning and progress; the stable architecture ADRs and test rules are committed under `docs/architecture/` and `docs/tests_rules.md`.
 
-The batched live mode uses one detection model with a bounded fair scheduler
-and independent camera trackers/rules. Python/Ultralytics is implemented;
-selecting the DeepStream adapter reports that it is unavailable. The diagnostic
-YAML examples explicitly use JSONL; PostgreSQL remains the production default.
-GPU batching uses explicit IEEE FP32 arithmetic. Fresh numerical parity and
-four-camera smoke pass; the 50-camera matrix misses FPS/drop targets. See
-[the runtime checkpoint](benchmarks/e-3/python-batched-runtime.md).
+The batched live mode uses one detection model with a bounded fair scheduler and independent camera trackers/rules. Python/Ultralytics is implemented; selecting the DeepStream adapter reports that it is unavailable. The diagnostic YAML examples explicitly use JSONL; PostgreSQL remains the production default. GPU batching uses explicit IEEE FP32 arithmetic. Fresh numerical parity and four-camera smoke pass; the 50-camera matrix misses FPS/drop targets. See [the runtime checkpoint](benchmarks/e-3/python-batched-runtime.md).
 
-The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally
-serves the local-AI stack and one is shared by AVA and other projects. AVA must
-measure live allocation before a run. The GPUs may be configured as a temporary
-test pool only for an explicitly approved experiment; they are never treated as
-pooled VRAM or permanently dedicated capacity.
+The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally serves the local-AI stack and one is shared by AVA and other projects. AVA must measure live allocation before a run. The GPUs may be configured as a temporary test pool only for an explicitly approved experiment; they are never treated as pooled VRAM or permanently dedicated capacity.
 
 ## Layout
 
@@ -55,8 +31,7 @@ docker-compose.yml  GPU-enabled one-shot run
 
 - Docker Engine + Compose with the NVIDIA Container Toolkit.
 - One people/vehicle MP4 placed at `videos/input.mp4` (read-only mount).
-- Model assets in `models/` (run `scripts/fetch-assets.sh`, or let the image
-  warm them on first use).
+- Model assets in `models/` (run `scripts/fetch-assets.sh`, or let the image warm them on first use).
 
 ## Run
 
@@ -74,37 +49,21 @@ docker compose run --rm ava run --config /configs/run-e2-rules.yaml
 docker compose run --rm ava run --config /configs/run-e2-negative.yaml
 ```
 
-Outputs land under `results/<path>/`: `detections.jsonl` and `annotated.mp4`.
-Rule-enabled runs also write `events.jsonl`. The event/evidence contract,
-snapshot/clip materialization and run isolation exist, but evidence-window
-correctness remains subject to the documented validation gates; do not treat a
-locator as verified until its file resolves.
-Override the GPU with `AVA_GPU=<index-or-uuid> docker compose run ...`.
+Outputs land under `results/<path>/`: `detections.jsonl` and `annotated.mp4`. Rule-enabled runs also write `events.jsonl`. The event/evidence contract, snapshot/clip materialization and run isolation exist, but evidence-window correctness remains subject to the documented validation gates; do not treat a locator as verified until its file resolves. Override the GPU with `AVA_GPU=<index-or-uuid> docker compose run ...`.
 
 ## PostgreSQL persistence
 
-**Breaking change (B-023):** PostgreSQL is the mandatory default backend.
-Event-producing camera and live runs require a reachable PostgreSQL server
-unless the config explicitly sets `persistence.backend: jsonl`. Detection-only
-file runs do not connect to an event sink.
+**Breaking change (B-023):** PostgreSQL is the mandatory default backend. Event-producing camera and live runs require a reachable PostgreSQL server unless the config explicitly sets `persistence.backend: jsonl`. Detection-only file runs do not connect to an event sink.
 
-To use PostgreSQL, set `AVA_PG_DSN` in the environment (or provide
-`persistence.dsn` in the config) and apply the schema first:
+To use PostgreSQL, set `AVA_PG_DSN` in the environment (or provide `persistence.dsn` in the config) and apply the schema first:
 
 ```bash
 AVA_PG_DSN=postgresql://ava:***@localhost:5432/ava alembic upgrade head
 ```
 
-The inference image includes the migration files; run Alembic with the
-image entrypoint overridden. PostgreSQL must be reachable at startup;
-if persistence fails during a live run, all cameras stop and the run
-fails.
+The inference image includes the migration files; run Alembic with the image entrypoint overridden. PostgreSQL must be reachable at startup; if persistence fails during a live run, all cameras stop and the run fails.
 
-**Container-to-database path:** Start the ops stack first, then attach the
-worker to its Docker network with the PostgreSQL Compose override. The host
-port remains bound to loopback. Use `postgres` as the database hostname inside
-the worker; use `localhost` for migrations run on the host. Copy an event-producing
-config under `configs/` and change its persistence backend to `postgres`:
+**Container-to-database path:** Start the ops stack first, then attach the worker to its Docker network with the PostgreSQL Compose override. The host port remains bound to loopback. Use `postgres` as the database hostname inside the worker; use `localhost` for migrations run on the host. Copy an event-producing config under `configs/` and change its persistence backend to `postgres`:
 
 ```bash
 AVA_PG_DSN='postgresql://ava:YOUR_PASSWORD@postgres:5432/ava' \
@@ -112,12 +71,7 @@ AVA_PG_DSN='postgresql://ava:YOUR_PASSWORD@postgres:5432/ava' \
   run --rm ava run --config /configs/your-postgres-config.yaml
 ```
 
-For file camera runs, set an optional `run_id` in the configuration to reuse
-event identities when retrying the same input. Omit it for a new run; AVA
-generates an identity, visible as the prefix before `-s1` in the first event's
-`session_id`. Reusing an ID for different input can cause distinct events to be
-treated as duplicates. A run with no events does not record the generated ID;
-specify one beforehand if it must be recoverable for a retry.
+For file camera runs, set an optional `run_id` in the configuration to reuse event identities when retrying the same input. Omit it for a new run; AVA generates an identity, visible as the prefix before `-s1` in the first event's `session_id`. Reusing an ID for different input can cause distinct events to be treated as duplicates. A run with no events does not record the generated ID; specify one beforehand if it must be recoverable for a retry.
 
 To opt out (file-only mode), add to the run config:
 
@@ -138,42 +92,17 @@ make test-coverage
 make lint
 ```
 
-The suites are intentionally separate because they prove different boundaries.
-Unit tests require no GPU. End-to-end and infrastructure tests may require the
-declared media, models, container runtime, GPU or services. An empty selected
-suite exits as not collected rather than being treated as a pass. The coverage
-gate requires at least 90% combined line and branch coverage; meaningful tests
-of changed behavior remain more important than maximizing the percentage. See
-`docs/tests_rules.md`.
+The suites are intentionally separate because they prove different boundaries. Unit tests require no GPU. End-to-end and infrastructure tests may require the declared media, models, container runtime, GPU or services. An empty selected suite exits as not collected rather than being treated as a pass. The coverage gate requires at least 90% combined line and branch coverage; meaningful tests of changed behavior remain more important than maximizing the percentage. See `docs/tests_rules.md`.
 
 ## API authentication and readiness
 
-Construct the API app with an `IdentityPolicy` to enable authenticated access
-to version and capabilities. Protected routes reject requests if no policy is
-configured. Liveness and readiness remain open. Every response carries an
-`X-Request-Id` header: a client-supplied canonical RFC 4122 UUID (lowercase)
-is preserved, otherwise AVA generates one; a malformed value yields a 400
-problem response with a newly generated ID and is never reflected or logged.
-Error responses include the request ID in both the header and the problem
-body. The canonical OpenAPI contract is `src/ava/api/openapi.yaml`; it is
-included in the package and served by the application.
-The separate local Keycloak and identity database stack is documented in
-[ops/README.md](ops/README.md#local-identity-provider).
-Readiness contributors may set `required = False` for optional dependencies;
-contributors default to required when the attribute is absent.
+Construct the API app with an `IdentityPolicy` to enable authenticated access to version and capabilities. Protected routes reject requests if no policy is configured. Liveness and readiness remain open. Every response carries an `X-Request-Id` header: a client-supplied canonical RFC 4122 UUID (lowercase) is preserved, otherwise AVA generates one; a malformed value yields a 400 problem response with a newly generated ID and is never reflected or logged. Error responses include the request ID in both the header and the problem body. The canonical OpenAPI contract is `src/ava/api/openapi.yaml`; it is included in the package and served by the application. The separate local Keycloak and identity database stack is documented in [ops/README.md](ops/README.md#local-identity-provider). Readiness contributors may set `required = False` for optional dependencies; contributors default to required when the attribute is absent.
 
 ## Event and camera reads (grant-scoped)
 
 When the app is constructed with event, grant and camera repositories, it enables cursor-paginated event reads, camera inventory, and admin inspection of camera state and grants. Admin grant PUT, grant DELETE and camera DELETE require a conforming mutation transaction factory. Access is grant-based: a caller sees a camera's history only while a current trusted grant covers their tenant and passes their site restriction; revocation removes access on the next read. Events expose evidence kind without internal paths or source URLs. Missing or inaccessible events return 404 without leaking existence.
 
-The event API requires event, grant and camera repositories together. Existing
-callers that construct `AppConfig` with only event and grant repositories must
-also provide a camera repository. For PostgreSQL, `compose_postgres_app(dsn,
-identity_policy=...)` constructs and validates all three repositories and
-closes their pools when the app shuts down. Apply Alembic migration 0004 before
-starting the updated service. Camera deletion hides the camera from inventory;
-its event history remains accessible according to current grants and site
-restrictions. Grant replacement creates or reactivates the camera atomically.
+The event API requires event, grant and camera repositories together. Existing callers that construct `AppConfig` with only event and grant repositories must also provide a camera repository. For PostgreSQL, `compose_postgres_app(dsn, identity_policy=...)` constructs and validates all three repositories and closes their pools when the app shuts down. Apply Alembic migration 0004 before starting the updated service. Camera deletion hides the camera from inventory; its event history remains accessible according to current grants and site restrictions. Grant replacement creates or reactivates the camera atomically.
 
 ## Request identification and mutation retries
 

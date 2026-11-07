@@ -22,7 +22,4 @@ E-1 offline maximum-speed throughput is not live event latency. For live/realtim
 
 Vendor channel counts or inference-only FPS cannot certify this system. The protocol costs GPU time and annotation work but prevents optimistic scaling claims. Keep raw metric samples and reports under `benchmarks/e-N/`, large artifacts outside Git. Revisit targets with real stream parameters, event semantics, accuracy requirements or hardware changes; preserve original results with their manifest.
 
-E-1 supplied a reproducible single-stream processing baseline. E-2 supplied
-functional event counts but no labelled precision/recall set, so it is not a
-quality gate. No concurrent-camera, live-latency or 30-minute capacity point has
-been measured; all such capacity claims remain pending E-3.
+E-1 supplied a reproducible single-stream processing baseline. E-2 supplied functional event counts but no labelled precision/recall set, so it is not a quality gate. No concurrent-camera, live-latency or 30-minute capacity point has been measured; all such capacity claims remain pending E-3.
