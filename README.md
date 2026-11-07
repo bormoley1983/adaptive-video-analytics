@@ -104,6 +104,8 @@ When the app is constructed with event, grant and camera repositories, it enable
 
 The event API requires event, grant and camera repositories together. Existing callers that construct `AppConfig` with only event and grant repositories must also provide a camera repository. For PostgreSQL, `compose_postgres_app(dsn, identity_policy=...)` constructs and validates all three repositories and closes their pools when the app shuts down. Apply Alembic migration 0004 before starting the updated service. Camera deletion hides the camera from inventory; its event history remains accessible according to current grants and site restrictions. Grant replacement creates or reactivates the camera atomically.
 
+Bearer tokens require a matching non-empty audience and a finite numeric expiry. Missing or malformed audience/expiry claims return 401; expired numeric expiry values remain rejected as expired.
+
 ## Request identification and mutation retries
 
 All non-probe API requests require a client-generated canonical UUID `Idempotency-Key`; health probes may omit it but validate supplied keys. Reads use it for identification only. Optional `X-Correlation-Id` is generated when absent and returned in responses; malformed values return 400. Both headers accept uppercase or lowercase hex and normalize internally. `X-Request-Id` identifies each HTTP attempt.
@@ -113,3 +115,17 @@ Grant PUT and both DELETE operations atomically store successful results with th
 Admin GETs for `/api/v1/grants/{camera_id}` and `/api/v1/cameras/{camera_id}` return distinct opaque ETags. Supply the target resource's tag in optional `If-Match` to prevent stale updates; tag lists and `*` are supported. Grant PUT returns its updated ETag. Successful DELETE responses return 204 without ETags; an absent grant and an already-soft-deleted camera are successful no-ops, while an unknown camera returns 404. Camera deletion preserves grants and historical access.
 
 Mutation transactions use a separate async pool (default maximum four connections) with immediate bounded admission and five-second lock timeouts; contention or exhausted admission returns 409. Request logs contain identifiers, method, route template, status and duration, with no request bodies or credentials.
+
+## Real identity-provider integration checks
+
+`python3 -m pytest -q tests/test_real_identity_integration.py` exercises the production JWT verifier against a disposable Keycloak realm with human and service identities, tenant/site restrictions, signing-key rotation, token expiry and provider outage/recovery. Install the development test dependencies first. Docker must be available, and both image digests from `ops/keycloak-compose.yml` must already be cached; missing prerequisites fail rather than silently skip these acceptance checks. The regular `make test-integration` and coverage gates include them.
+
+The tests create uniquely named containers and a network, use a dedicated disposable identity PostgreSQL database, generate credentials in memory, and publish Keycloak on a dynamic loopback port. They do not read `ops/.env` or change an existing identity stack. The outage check suspends and resumes only the test-owned provider. Set `AVA_TEST_IDENTITY_EVIDENCE_DIR` to preserve redacted provider logs and lifecycle records at a chosen persistent location; the default is `results/identity-acceptance/`. Cleanup removes only test-owned resources, including on setup failure. These integration checks do not establish installed real-HTTP API acceptance or inference quality.
+
+## Installed HTTP API acceptance
+
+`make test-e2e` rebuilds an isolated `.venv-e2e` environment, installs the API test dependencies and AVA non-editably, then runs the real-HTTP API workflow. Set `PYTHON` to the development interpreter and `E2E_VENV` to an owned environment path when needed. Installation needs the declared Python packages; Docker and both pinned images from `ops/keycloak-compose.yml` must be available before the tests start.
+
+The workflow uses a real disposable Keycloak realm, separate identity and event PostgreSQL containers, and a separate API process listening on a dynamic loopback port. It verifies package paths in both processes, migrates and seeds the database through the installed persistence adapter, and checks event pagination/metadata, human and service identities, tenant/site isolation, redaction and grant revocation/regrant. Source-checkout or editable imports, missing approved fixture bytes and missing required services fail the gate. Server startup and shutdown must complete the production application lifespan.
+
+The committed event fixture contains approved sanitized records from real runs, including distinct run session aliases. This proves API handling of that data; it does not certify inference accuracy, original media availability or media delivery. Credentials are generated in memory, test configuration is passed to the server through stdin, and only test-owned processes/containers are cleaned up. `AVA_TEST_IDENTITY_EVIDENCE_DIR` controls persistent redacted server/provider logs, import provenance and lifecycle evidence. The existing packaged integration gate remains separate.

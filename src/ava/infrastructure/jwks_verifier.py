@@ -11,8 +11,9 @@ Verified library behavior (authlib 1.6.12, Python 3.11):
   ``iss`` claim option carries a value; a mismatch raises
   ``InvalidClaimError``.
 - ``JWTClaims.validate_aud()`` enforces the configured audience when the
-  ``aud`` option carries a value or values list; a missing or mismatched
-  audience raises ``InvalidClaimError``.
+  ``aud`` option carries a value or values list; a mismatched
+  audience raises ``InvalidClaimError`` when present; AVA separately requires
+  a non-empty audience.
 - ``JWTClaims.validate_exp(now, leeway)`` rejects expired tokens and
   non-numeric expiry values. It is NOT called automatically by
   ``JsonWebToken.decode`` — the caller must invoke it explicitly.
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import json as _json
+import math
 import threading
 import time
 from typing import Any
@@ -247,6 +249,17 @@ class JwksRsaVerifier:
             raise TokenValidationError("invalid", f"claim validation failed: {exc}") from exc
         except (DecodeError, JoseError) as exc:
             raise TokenValidationError("malformed", str(exc)) from exc
+
+        # Authlib treats these claims as optional; the API contract requires both.
+        audience = claims.get("aud")
+        audiences = [audience] if isinstance(audience, str) else audience
+        if (not isinstance(audiences, list) or not audiences
+                or not all(isinstance(value, str) and value for value in audiences)):
+            raise TokenValidationError("invalid", "token audience is missing or invalid")
+        expiry = claims.get("exp")
+        if (isinstance(expiry, bool) or not isinstance(expiry, (int, float))
+                or (isinstance(expiry, float) and not math.isfinite(expiry))):
+            raise TokenValidationError("invalid", "token expiry is missing or invalid")
 
         try:
             claims.validate_iss()

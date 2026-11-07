@@ -40,3 +40,6 @@ build/
 
 # Packaged acceptance gate: isolated venv is rebuilt by `make test-packaged`.
 .venv-packaged/
+
+# Installed API workflow environment rebuilt by the E2E gate.
+.venv-e2e/

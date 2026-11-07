@@ -88,6 +88,7 @@ def _make_token(
     now = time.time()
     claims: dict[str, Any] = {
         "iss": issuer,
+        "aud": AUDIENCE,
         "sub": sub,
         "tenant": tenant,
         "roles": roles if roles is not None else ["viewer"],
@@ -131,6 +132,75 @@ class TestVerifierPositive:
         token = _make_token(rsa_key, roles=[role])
         identity = verifier.verify(token)
         assert role in identity.roles
+
+
+def _token_without_claim(rsa_key, claim):
+    claims = pyjwt.decode(_make_token(rsa_key), options={"verify_signature": False})
+    del claims[claim]
+    return pyjwt.encode(claims, rsa_key, algorithm="RS256", headers={"kid": KID})
+
+
+class TestRequiredTokenClaims:
+    @pytest.mark.parametrize("claim", ["aud", "exp"])
+    def test_missing_required_claim_is_rejected(self, verifier, rsa_key, claim):
+        token = _token_without_claim(rsa_key, claim)
+
+        with pytest.raises(TokenValidationError) as error:
+            verifier.verify(token)
+
+        assert error.value.code == "invalid"
+
+    @pytest.mark.parametrize("audience", [
+        None, "", [], 42, True, {}, [""], [AUDIENCE, 1], [AUDIENCE, None], [AUDIENCE, ""],
+    ])
+    def test_malformed_audience_is_rejected(self, verifier, rsa_key, audience):
+        token = _make_token(rsa_key, extra_claims={"aud": audience})
+
+        with pytest.raises(TokenValidationError) as error:
+            verifier.verify(token)
+
+        assert error.value.code == "invalid"
+
+    @pytest.mark.parametrize("expiry", [
+        None, True, False, "", "123", {}, [], float("nan"), float("inf"), float("-inf"),
+    ])
+    def test_malformed_expiry_is_rejected(self, verifier, rsa_key, expiry):
+        token = _make_token(rsa_key, extra_claims={"exp": expiry})
+
+        with pytest.raises(TokenValidationError) as error:
+            verifier.verify(token)
+
+        assert error.value.code == "invalid"
+
+    @pytest.mark.parametrize("audience", [AUDIENCE, [AUDIENCE], ["other-api", AUDIENCE]])
+    def test_matching_string_or_list_audience_is_accepted(self, verifier, rsa_key, audience):
+        token = _make_token(rsa_key, extra_claims={"aud": audience})
+
+        caller = verifier.verify(token)
+
+        assert caller.subject == "user-1"
+
+    @pytest.mark.parametrize("fraction", [0, 0.5])
+    def test_integer_or_fractional_expiry_is_accepted(self, verifier, rsa_key, fraction):
+        expiry = int(time.time()) + 3600 + fraction
+        token = _make_token(rsa_key, extra_claims={"exp": expiry})
+
+        caller = verifier.verify(token)
+
+        assert caller.subject == "user-1"
+
+    @pytest.mark.parametrize("claim", ["aud", "exp"])
+    def test_missing_claim_rejects_protected_http_request(self, verifier, rsa_key, claim):
+        token = _token_without_claim(rsa_key, claim)
+        app = create_app(AppConfig(identity_policy=verifier))
+        with TestClient(app) as client:
+            response = client.get("/api/v1/version", headers={
+                "Authorization": "Bearer " + token,
+                "Idempotency-Key": "00000000-0000-4000-8000-000000000001",
+            })
+
+        assert response.status_code == 401
+        assert response.json()["code"] == "invalid"
 
 
 class TestVerifierNegative:
