@@ -19,11 +19,16 @@ from .events import EventRecord
 from .live_ingest import LiveSourceConfig, iter_live_frames
 from .live_metrics import _percentile, _query_gpu, _query_host
 from .rules import RuleEngine
+from .stage_metrics import CpuSampler, StageRecorder, stage_span
 from .telemetry import Telemetry, new_run_context, serve_metrics
 
 
 class _Camera:
-    def __init__(self, config, rules, limit):
+    def __init__(self, config, rules, limit, recorder=None):
+        self.recorder = recorder
+        self.offered_at = None
+        self.delivery_at = None
+        self.ack_at = None
         self.config = config
         self.rules = rules
         self.limit = limit
@@ -67,7 +72,8 @@ class _Camera:
     def produce(self, live, stop, source):
         source_config = LiveSourceConfig(
             self.config.url, backend=live.backend, reconnect_max=live.reconnect_max,
-            reconnect_delay_s=live.reconnect_delay_s, stop_event=stop)
+            reconnect_delay_s=live.reconnect_delay_s, stop_event=stop,
+            stage_recorder=self.recorder, camera_id=self.config.id)
         try:
             for frame in source(source_config):
                 now = time.monotonic()
@@ -125,6 +131,8 @@ class _Camera:
             except Empty:
                 continue
             item, result = delivery.item, delivery.result
+            if self.recorder is not None and self.delivery_at is not None:
+                self.recorder.observe("delivery_queue_wait_host_wall", self.delivery_at, time.monotonic(), self.config.id)
             reason = "delivered"
             try:
                 if item.key.session_id != self.session:
@@ -139,17 +147,25 @@ class _Camera:
                         session = item.key.session_id
                         tracker.reset(session)
                         engine = RuleEngine(self.rules, self.config.id, session)
-                    tracked = tracker.update(item, result)
+                    with stage_span(self.recorder, "tracking_host_wall", self.config.id):
+                        tracked = tracker.update(item, result)
                     emitted = datetime.now(UTC).isoformat()
-                    for event in engine.process_frame(tracked, emitted):
+                    with stage_span(self.recorder, "rules_host_wall", self.config.id):
+                        events = engine.process_frame(tracked, emitted)
+                    for event in events:
                         record = EventRecord.from_rule_event(
                             event, config_version=CONFIG_SCHEMA_VERSION,
                             model_ref=str(detector.model), capture_utc=item.frame.capture_utc,
                             time_basis=item.frame.time_basis)
-                        if live.slow_sink_s:
-                            time.sleep(live.slow_sink_s)
+                        with stage_span(self.recorder, "sink_delay_host_wall", self.config.id):
+                            if live.slow_sink_s:
+                                time.sleep(live.slow_sink_s)
+                        lock_started = time.monotonic() if self.recorder is not None else None
                         with sink_lock:
-                            inserted = sink.write(record)
+                            if self.recorder is not None:
+                                self.recorder.observe("sink_lock_wait_host_wall", lock_started, time.monotonic(), self.config.id)
+                            with stage_span(self.recorder, "sink_write_host_wall", self.config.id):
+                                inserted = sink.write(record)
                         if inserted:
                             self.events += 1
                             if self.telemetry is not None:
@@ -163,6 +179,7 @@ class _Camera:
                 failure_stop.set()
             finally:
                 self.finish(item, reason)
+                self.ack_at = time.monotonic() if self.recorder is not None else None
                 ack.put(item.key)
 
     def report(self, duration):
@@ -189,8 +206,14 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
     """Run one common window after every source and the model become ready."""
     from .live_runner import CameraStats, LiveRunSummary
 
+    recorder = (StageRecorder(max_series=32 + 12 * len(live.cameras),
+                              sample_every=live.batch.profile_sample_every)
+                if live.batch.profile_stages else None)
+    if recorder is not None:
+        recorder.window = (float("inf"), float("inf"))
+    cpu_sampler = CpuSampler(minimum_interval_s=15.) if recorder is not None else None
     profiles = {p.id: p.rules for p in live.profiles}
-    cameras = {c.id: _Camera(c, [r for ref in c.profiles for r in profiles[ref]], live.buffer_size)
+    cameras = {c.id: _Camera(c, [r for ref in c.profiles for r in profiles[ref]], live.buffer_size, recorder)
                for c in live.cameras}
     stop = threading.Event()
     processors_stop = threading.Event()
@@ -198,7 +221,8 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
     sink_lock = threading.Lock()
     scheduler = BatchScheduler(cameras, live.batch.max_batch_size, live.batch.max_wait_ms,
                                live.batch.shutdown_timeout_s)
-    executor = BatchExecutor(backend_factory or (lambda: UltralyticsBatchDetector(detector, gpu)))
+    executor = BatchExecutor(backend_factory or (lambda: UltralyticsBatchDetector(detector, gpu, recorder=recorder)),
+                             recorder=recorder)
     threads = []
     processors = []
     error = None
@@ -216,6 +240,8 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
         nonlocal sample_count
         while not sampler_stop.is_set():
             sample = {"at": time.monotonic(), **_query_host()}
+            if cpu_sampler is not None:
+                sample["cpu"] = cpu_sampler.sample()
             gpu_sample = _query_gpu(gpu or "0") if gpu is not None else None
             sample["gpu"] = asdict(gpu_sample) if gpu_sample is not None else None
             resource_samples.append(sample)
@@ -238,6 +264,11 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
                 key = ack.get_nowait()
             except Empty:
                 return
+            if recorder is not None:
+                camera = cameras[key.camera_id]
+                if camera.ack_at is not None:
+                    recorder.observe("acknowledgement_wait_host_wall", camera.ack_at, time.monotonic(), key.camera_id)
+                    camera.ack_at = None
             scheduler.acknowledge(key)
 
     def receive():
@@ -258,6 +289,7 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
         for delivery in deliveries:
             camera = cameras[delivery.item.key.camera_id]
             camera.inference_duration_s = result.seconds
+            camera.delivery_at = time.monotonic() if recorder is not None else None
             camera.delivery.put_nowait(delivery)
 
     try:
@@ -293,6 +325,8 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
             thread.start()
         window_start = time.monotonic() + live.batch.warmup_s
         window = (window_start, window_start + live.duration_s) if live.duration_s else None
+        if recorder is not None:
+            recorder.window = window
         for camera in cameras.values():
             camera.window = window
         next_sample = time.monotonic()
@@ -318,12 +352,22 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
                     camera.finish(item, "cadence_skipped")
                     continue
                 admission = scheduler.offer(item)
+                if recorder is not None and admission.accepted:
+                    camera.offered_at = (item.key, time.monotonic())
                 if admission.displaced:
                     camera.finish(admission.displaced, "candidate_replaced")
                 if not admission.accepted:
                     camera.finish(item, admission.reason)
             batch = scheduler.next_batch()
             if batch is not None:
+                if recorder is not None:
+                    submitted_at = time.monotonic()
+                    for item in batch.items:
+                        camera = cameras[item.key.camera_id]
+                        recorder.observe("enqueue_to_submit_host_wall", item.enqueued_at, submitted_at, camera.config.id)
+                        if camera.offered_at is not None and camera.offered_at[0] == item.key:
+                            recorder.observe("offer_to_submit_host_wall", camera.offered_at[1], submitted_at, camera.config.id)
+                        camera.offered_at = None
                 executor.submit(batch)
             if now >= next_sample:
                 depths = {}
@@ -391,6 +435,9 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
                   "queue_samples": list(queue_samples),
                   "resource_samples": list(resource_samples),
                   "resource_samples_truncated": sample_count > len(resource_samples)}
+        if recorder is not None:
+            report["stage_profile"] = recorder.report()
+            report["stage_profile"]["cpu_sample_min_interval_s"] = 15.
         path = output_dir / "metrics.json"
         path.write_text(json.dumps(report, indent=2))
     if status != "completed":
