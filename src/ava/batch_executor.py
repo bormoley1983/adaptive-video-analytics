@@ -13,12 +13,14 @@ class Execution:
     batch: DetectionBatch
     results: tuple[BatchItemResult, ...]
     seconds: float
+    completed_at: float = 0.
 
 
 class BatchExecutor:
     """Load, invoke and release a backend on exactly one daemon thread."""
 
-    def __init__(self, factory):
+    def __init__(self, factory, *, recorder=None):
+        self.recorder = recorder
         self._factory = factory
         self._requests = Queue(maxsize=1)
         self._results = Queue(maxsize=1)
@@ -40,7 +42,7 @@ class BatchExecutor:
     def submit(self, batch):
         if not self.ready.is_set() or self.error or self._stop.is_set() or self._busy:
             raise RuntimeError("executor is unavailable")
-        self._requests.put_nowait(batch)
+        self._requests.put_nowait((batch, monotonic()))
         self._busy = True
 
     def poll(self):
@@ -49,6 +51,8 @@ class BatchExecutor:
         except Empty:
             return None
         self._busy = False
+        if self.recorder is not None:
+            self.recorder.observe("executor_result_wait_host_wall", result.completed_at, monotonic())
         return result
 
     def close(self, timeout):
@@ -66,10 +70,12 @@ class BatchExecutor:
             self.ready.set()
             while not self._stop.is_set() or not self._requests.empty():
                 try:
-                    batch = self._requests.get(timeout=.02)
+                    batch, submitted_at = self._requests.get(timeout=.02)
                 except Empty:
                     continue
                 started = monotonic()
+                if self.recorder is not None:
+                    self.recorder.observe("executor_queue_wait_host_wall", submitted_at, started)
                 try:
                     results = tuple(self.backend.detect_batch(batch))
                 except Exception as exc:  # noqa: BLE001 - preserve worker failure and cleanup evidence
@@ -77,7 +83,10 @@ class BatchExecutor:
                     results = tuple(BatchItemResult(item.key, failure=failure)
                                     for item in batch.items)
                 try:
-                    self._results.put_nowait(Execution(batch, results, monotonic() - started))
+                    completed = monotonic()
+                    if self.recorder is not None:
+                        self.recorder.observe("executor_call_host_wall", started, completed)
+                    self._results.put_nowait(Execution(batch, results, completed - started, completed))
                 except Full:
                     raise RuntimeError("undelivered executor result") from None
         except Exception as exc:  # noqa: BLE001 - preserve worker failure and cleanup evidence

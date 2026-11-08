@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from .batch import BatchItemResult
 from .batch_precision import configure_precision, precision_settings, restore_precision
 from .detector import Detection, FrameResult, _resolve_device
+from .stage_metrics import stage_span
 
 
 def validate_backend(live, detector):
@@ -16,7 +17,9 @@ def validate_backend(live, detector):
 
 
 class UltralyticsBatchDetector:
-    def __init__(self, config, gpu="0"):
+    def __init__(self, config, gpu="0", *, recorder=None):
+        self.recorder = recorder
+        self._stage_originals = {}
         self.config = config
         self.device = _resolve_device(gpu)
         self.model = None
@@ -37,6 +40,23 @@ class UltralyticsBatchDetector:
         self.model.to(self.device)
         import numpy as np
         self._predict([np.zeros((640, 640, 3), dtype=np.uint8)])
+        if self.recorder is not None:
+            self._attach_stage_hooks()
+
+    def _attach_stage_hooks(self):
+        predictor = getattr(self.model, "predictor", None)
+        if predictor is None:
+            raise RuntimeError("stage profiling requires a warmed predictor")
+        names = ("preprocess", "inference", "postprocess")
+        if not all(callable(getattr(predictor, name, None)) for name in names):
+            raise RuntimeError("predictor stage hooks are unavailable")
+        for name in names:
+            original = getattr(predictor, name)
+            self._stage_originals[name] = (predictor, original)
+            def measured(*args, _original=original, _name=name, **kwargs):
+                with stage_span(self.recorder, "predictor_" + _name + "_host_wall"):
+                    return _original(*args, **kwargs)
+            setattr(predictor, name, measured)
 
     def _check_precision(self):
         if self.device == "cuda":
@@ -55,23 +75,27 @@ class UltralyticsBatchDetector:
     def detect_batch(self, batch):
         if self.model is None:
             raise RuntimeError("backend is not loaded")
-        outputs = self._predict([item.frame.bgr for item in batch.items])
+        with stage_span(self.recorder, "prediction_host_wall"):
+            outputs = self._predict([item.frame.bgr for item in batch.items])
         if len(outputs) != len(batch.items):
             raise ValueError("backend result count differs from input")
-        results = []
-        for item, output in zip(batch.items, outputs, strict=True):
-            height, width = item.frame.bgr.shape[:2]
-            detections = []
-            for row in output.boxes.data.cpu().tolist():
-                x1, y1, x2, y2, confidence, class_id = row
-                class_id = int(class_id)
-                box = tuple(max(0., min(1., v)) for v in
-                            (x1 / width, y1 / height, x2 / width, y2 / height))
-                detections.append(Detection(class_id, output.names[class_id], confidence, box))
-            results.append(BatchItemResult(item.key, width, height, tuple(detections)))
-        return tuple(results)
-
+        with stage_span(self.recorder, "result_conversion_host_wall"):
+            results = []
+            for item, output in zip(batch.items, outputs, strict=True):
+                height, width = item.frame.bgr.shape[:2]
+                detections = []
+                for row in output.boxes.data.cpu().tolist():
+                    x1, y1, x2, y2, confidence, class_id = row
+                    class_id = int(class_id)
+                    box = tuple(max(0., min(1., v)) for v in
+                                (x1 / width, y1 / height, x2 / width, y2 / height))
+                    detections.append(Detection(class_id, output.names[class_id], confidence, box))
+                results.append(BatchItemResult(item.key, width, height, tuple(detections)))
+            return tuple(results)
     def close(self):
+        for name, (predictor, original) in self._stage_originals.items():
+            setattr(predictor, name, original)
+        self._stage_originals.clear()
         self.model = None
         if "before" in self.arithmetic:
             restore_precision(self._torch, self.arithmetic["before"])

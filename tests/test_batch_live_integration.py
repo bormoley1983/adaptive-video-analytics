@@ -54,11 +54,21 @@ def config():
         cameras=[{"id": c, "url": f"rtsp://example/{c}", "analysis_fps": 100} for c in "ab"])
 
 
-def test_common_window_and_terminal_ledgers(tmp_path):
-    summary = run_batched_live(config(), DetectorConfig(model=Path("unused.pt")), tmp_path,
+@pytest.mark.parametrize("profile", [False, True])
+def test_common_window_and_terminal_ledgers(tmp_path, profile):
+    live = config()
+    live.batch.profile_stages = profile
+    live.batch.profile_sample_every = 1
+    summary = run_batched_live(live, DetectorConfig(model=Path("unused.pt")), tmp_path,
                                None, Sink(), source=source, backend_factory=Backend,
                                tracker_factory=Tracker)
     report = json.loads((tmp_path / "metrics.json").read_text())
+    assert ("stage_profile" in report) == profile
+    if profile:
+        stages = {s["stage"] for s in report["stage_profile"]["series"]}
+        assert {"tracking_host_wall", "rules_host_wall", "executor_call_host_wall",
+                "enqueue_to_submit_host_wall"} <= stages
+        assert report["stage_profile"]["window"] == report["measurement_window"]
     assert summary.total_events == 0
     assert report["status"] == "completed"
     assert report["unresolved_threads"] == []
@@ -73,13 +83,16 @@ def test_common_window_and_terminal_ledgers(tmp_path):
 def test_readiness_failure_preserves_failure_report(tmp_path):
     def empty(config):
         return iter(())
+    live = config()
+    live.batch.profile_stages = True
     with pytest.raises(RuntimeError, match="readiness"):
-        run_batched_live(config(), DetectorConfig(model=Path("unused.pt")), tmp_path,
+        run_batched_live(live, DetectorConfig(model=Path("unused.pt")), tmp_path,
                          None, Sink(), source=empty, backend_factory=Backend,
                          tracker_factory=Tracker)
     report = json.loads((tmp_path / "metrics.json").read_text())
     assert report["status"] == "failed"
     assert report["measurement_window"] is None
+    json.dumps(report, allow_nan=False)
     assert report["unresolved_threads"] == []
 
 

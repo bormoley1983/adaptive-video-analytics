@@ -381,6 +381,8 @@ class BatchConfig(BaseModel):
     """Bounded scheduling, startup and shutdown controls."""
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
+    profile_stages: bool = Field(False, strict=True)
+    profile_sample_every: int = Field(16, ge=1, strict=True)
     max_batch_size: int = Field(16, gt=0, strict=True)
     max_wait_ms: float = Field(20, gt=0)
     readiness_timeout_s: float = Field(60, gt=0)

@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from .ingest import Frame, TimeBasis
+from .stage_metrics import stage_span
 
 
 def _utc_now_iso() -> str:
@@ -50,6 +51,8 @@ class LiveSourceConfig:
     # Optional stop signal checked between frame reads and during backoff.
     # When set, the iterator stops yielding and returns cleanly.
     stop_event: threading.Event | None = None
+    stage_recorder: object | None = field(default=None, repr=False)
+    camera_id: str | None = None
 
 
 @dataclass
@@ -163,7 +166,8 @@ def iter_live_frames(config: LiveSourceConfig) -> Iterator[Frame]:
             while True:
                 if _stopped():
                     break
-                ok, frame = cap.read()
+                with stage_span(config.stage_recorder, "decode_read_host_wall", config.camera_id):
+                    ok, frame = cap.read()
                 if not ok:
                     break
                 ts = session_frame / fps if fps > 0 else float(session_frame)

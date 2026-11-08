@@ -9,7 +9,8 @@ from ava.live_runner import run_live
 
 
 @pytest.mark.parametrize("field,value", [("max_batch_size", 0), ("max_batch_size", True),
-    ("max_batch_size", 1.5), ("max_wait_ms", 0), ("readiness_timeout_s", -1),
+    ("max_batch_size", 1.5), ("profile_stages", "true"), ("profile_stages", 1), ("profile_sample_every", 0),
+    ("profile_sample_every", True), ("profile_sample_every", 1.5), ("max_wait_ms", 0), ("readiness_timeout_s", -1),
     ("warmup_s", -1), ("shutdown_timeout_s", float("inf")), ("unknown", 1)])
 def test_rejects_invalid_batch_controls(field, value):
     with pytest.raises(ValidationError):
@@ -17,6 +18,9 @@ def test_rejects_invalid_batch_controls(field, value):
 
 
 def test_batch_defaults_and_large_size():
+    assert BatchConfig().profile_stages is False
+    assert BatchConfig().profile_sample_every == 16
+    assert BatchConfig(profile_stages=True).profile_stages is True
     assert BatchConfig().max_batch_size == 16
     assert BatchConfig(max_batch_size=100).max_batch_size == 100
 

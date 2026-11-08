@@ -116,3 +116,41 @@ def test_load_warms_once_and_restores_precision_on_close(monkeypatch):
     backend.close()
     assert precision_settings(torch) == before
     assert backend.model is None
+
+
+def test_predictor_stage_hooks_preserve_results_failures_and_restore_methods():
+    from ava.stage_metrics import StageRecorder
+
+    calls = []
+    def preprocess(value):
+        calls.append(value)
+        return value
+    def fail(value):
+        raise ValueError("prediction failed")
+    predictor = SimpleNamespace(preprocess=preprocess, inference=fail, postprocess=preprocess)
+    backend = UltralyticsBatchDetector(DetectorConfig(model=Path("unused.pt")), None,
+                                      recorder=StageRecorder())
+    backend.model = SimpleNamespace(predictor=predictor)
+    backend._attach_stage_hooks()
+    assert predictor.preprocess("frame") == "frame"
+    with pytest.raises(ValueError, match="prediction failed"):
+        predictor.inference("frame")
+    stages = {s["stage"]: s for s in backend.recorder.report()["series"]}
+    assert stages["predictor_inference_host_wall"]["count"] == 1
+    assert calls == ["frame"]
+    backend.close()
+    assert predictor.preprocess is preprocess
+    assert predictor.inference is fail
+    assert backend.model is None
+
+
+@pytest.mark.parametrize("predictor", [None, SimpleNamespace(preprocess=lambda: None)])
+def test_stage_hooks_fail_explicitly_when_predictor_boundary_is_unsupported(predictor):
+    from ava.stage_metrics import StageRecorder
+
+    backend = UltralyticsBatchDetector(DetectorConfig(model=Path("unused.pt")), None,
+                                      recorder=StageRecorder())
+    backend.model = SimpleNamespace(predictor=predictor)
+    with pytest.raises(RuntimeError, match="predictor"):
+        backend._attach_stage_hooks()
+    backend.close()
