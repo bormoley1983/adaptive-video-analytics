@@ -1,6 +1,6 @@
 # AVA local observability platform (B-022)
 
-CPU-only Docker Compose project for AVA's local operational dependencies, separate from the GPU analytics worker and the RTSP replay harness (ADR-15). Services: **PostgreSQL** (events), **Prometheus** (metrics), **Grafana** (dashboards), **Loki** (logs), **Alloy** (Docker log discovery/forwarding).
+CPU-only Docker Compose project for AVA's local operational dependencies, separate from the GPU analytics worker and the RTSP replay harness (ADR-15). Services: **PostgreSQL** (events), **Postgres Exporter** (metrics), **Prometheus** (metrics), **Grafana** (dashboards), **Loki** (logs), **Alloy** (Docker log discovery/forwarding).
 
 ## Lifecycle
 
@@ -22,6 +22,8 @@ State persists in named volumes (`ops-postgres`, `ops-prometheus`, `ops-loki`, `
 | Grafana    | 3000      | Dashboards, log search           |
 | Prometheus | 9090      | Metrics queries, target health   |
 | Loki       | 3100      | Log API (used by Grafana/Alloy)  |
+
+The Postgres Exporter runs on port 9187 inside the project network only; it is not published to the host. Prometheus scrapes it via the `postgres-exporter` service name.
 
 Service-to-service traffic uses the `ava-ops` project network; no service is reachable from the LAN. The optional worker Compose override joins that network for PostgreSQL access; see the root README for its invocation.
 
@@ -77,6 +79,7 @@ Read-only socket access still allows listing containers and reading their logs â
 | Grafana    | 13.2.4  | `dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f`     |
 | Loki       | 3.7.9   | `0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28`     |
 | Alloy      | 1.21.2  | `89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18`     |
+| Postgres Exporter | 0.20.1 | `ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e`  |
 
 Re-pin after an upstream update: pull the new image, verify it, replace the `@sha256:` reference and this table.
 
@@ -90,6 +93,22 @@ du -sh /var/lib/docker/volumes/ops-prometheus /var/lib/docker/volumes/ops-loki /
 ```
 
 Record results in `docs/progress/YYYY-MM-DD.md`. Retention is 7 days for both Prometheus TSDB and Loki (provisional; B-024 owns retention policy).
+
+## Alert rules
+
+Prometheus alert rules are defined in `ops/prometheus/rules.yml` and loaded via `rule_files` in `prometheus.yml`. Five initial rules ship with this slice; thresholds are provisional pending B-003/B-009 owner inputs.
+
+| Rule | Expression | For | Severity |
+| ------ | ----------- | ----- | ---------- |
+| `AvaServiceDown` | `up{job="ava"} == 0` | 2m | critical |
+| `PrometheusConfigReloadFailed` | `prometheus_config_last_reload_successful == 0` | 5m | warning |
+| `PrometheusTSDBCompactionsFailing` | `rate(prometheus_tsdb_compactions_failed_total[10m]) > 0` | 10m | warning |
+| `LokiRequestErrorsHigh` | Loki 5xx rate > 5% over 5m | 10m | warning |
+| `PostgresUnavailable` | `(up{job="postgres"} == 0) or (pg_up{job="postgres"} == 0)` | 2m | critical |
+
+The PostgreSQL alert checks both exporter scrape availability (`up`) and database connectivity (`pg_up`). Infrastructure checks stop and recover the disposable database and exporter separately, verifying that a database outage alerts even while the exporter remains scrapeable.
+
+Grafana alerting is out of scope for this slice (B-024 parent tracks notification routing).
 
 ## Outage semantics
 
