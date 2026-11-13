@@ -39,6 +39,27 @@ services:
       start_period: 10s
     mem_limit: 512m
 
+  # PostgreSQL metrics exporter. Connects to the ops postgres and
+  # exposes Prometheus metrics on port 9187 inside the project network.
+  # No host port is published; Prometheus scrapes it via the service name.
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+    restart: on-failure
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/ava?sslmode=disable"
+      DATA_SOURCE_USER: ava
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in ops/.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9187/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 256m
+
   prometheus:
     image: prom/prometheus@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     restart: on-failure
@@ -48,7 +69,7 @@ services:
       - "--storage.tsdb.retention.time=7d"
       - "--web.enable-lifecycle"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus:/etc/prometheus:ro
       - ops-prometheus:/prometheus
     ports:
       - "127.0.0.1:9090:9090"

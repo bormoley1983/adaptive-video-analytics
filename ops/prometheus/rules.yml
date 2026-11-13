@@ -1,0 +1,60 @@
+# Prometheus alert rules for the AVA local observability platform (B-024-S1).
+#
+# Thresholds are provisional pending B-003/B-009 owner inputs; final values
+# are tracked by the B-024 parent task.
+
+groups:
+  - name: ava-service-health
+    rules:
+      - alert: AvaServiceDown
+        expr: up{job="ava"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AVA live worker /metrics endpoint unreachable"
+          description: "up{job=\"ava\"} has been 0 for 2 minutes. The AVA live analytics worker is not reachable at its Prometheus scrape target."
+
+  - name: ops-platform-health
+    rules:
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus config reload failed"
+          description: "The last Prometheus configuration reload was not successful. Check the active config and recent changes."
+
+      - alert: PrometheusTSDBCompactionsFailing
+        expr: rate(prometheus_tsdb_compactions_failed_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus TSDB compaction failures"
+          description: "TSDB compactions have been failing over the last 10 minutes. Check disk space and Prometheus logs."
+
+      - alert: LokiRequestErrorsHigh
+        expr: >
+          sum(rate(loki_request_duration_seconds_count{status_code=~"5.."}[5m]))
+          /
+          sum(rate(loki_request_duration_seconds_count[5m]))
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki 5xx error rate above 5%"
+          description: "More than 5% of Loki HTTP requests have returned 5xx over the last 5 minutes."
+
+  - name: database-health
+    rules:
+      - alert: PostgresUnavailable
+        expr: (up{job="postgres"} == 0) or (pg_up{job="postgres"} == 0)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL or its metrics exporter unavailable"
+          description: "The PostgreSQL metrics exporter has been unreachable or unable to connect to the ops database for 2 minutes."
