@@ -7,6 +7,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -658,3 +659,190 @@ def test_prometheus_retention_flag_present(ops_stack: str) -> None:
         else:
             time.sleep(5)
     assert pg_up, "postgres-exporter target (job=postgres) not up within 60s"
+
+
+def _pg_connect(dbname: str = "ava"):
+    return psycopg.connect(
+        host="127.0.0.1",
+        port=POSTGRES_PORT,
+        dbname=dbname,
+        user="ava",
+        password="test-only-postgres",
+    )
+
+
+def _project_network(project: str) -> str:
+    # The fixture renders a scratch compose file without the top-level `name:`
+    # key, so the default network is named after --project-name.
+    return f"{project}_default"
+
+
+def test_backup_restore_drill_proves_consistency_and_records_rto(ops_stack: str) -> None:
+    """Backup, destroy, restore, then prove row-level consistency and record RTO.
+
+    Seeds representative events/outbox rows (including evidence metadata),
+    takes a logical dump, drops and recreates the database, restores from the
+    dump, re-applies migrations, and verifies counts, FK integrity and
+    evidence-column integrity. The measured recovery time is written to the
+    per-run evidence directory as an RTO data point (no hard bound asserted;
+    thresholds are provisional under B-003/B-004/B-009).
+    """
+    assert EVIDENCE_DIR is not None
+    backup_dir = EVIDENCE_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    env = {
+        **os.environ,
+        "AVA_PG_HOST": "127.0.0.1",
+        "AVA_PG_PORT": str(POSTGRES_PORT),
+        "AVA_PG_USER": "ava",
+        "AVA_PG_PASSWORD": "test-only-postgres",
+        "AVA_PG_DB": "ava",
+        "AVA_BACKUP_DIR": str(backup_dir),
+        "AVA_TEST_EVIDENCE_DIR": str(EVIDENCE_DIR),
+        "AVA_PG_DSN": f"postgresql://ava:test-only-postgres@127.0.0.1:{POSTGRES_PORT}/ava",
+    }
+
+    def run_backup(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(OPS_DIR / "backup.sh"), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+
+    # Arrange: apply migrations and seed representative rows.
+    with _pg_connect() as conn:
+        conn.execute("SELECT 1")
+    alembic = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+    assert alembic.returncode == 0, alembic.stderr
+
+    with _pg_connect() as conn:
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO events (event_id, camera_id, session_id, track_id, rule_id, rule_type, class_label, confidence, source_time_s, emitted_utc, time_basis, config_version, schema_version, frame_index, evidence_kind, evidence_path, payload) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), 'file_pts_only', 'cfg-1', 'v1', %s, %s, %s, %s)",
+                (f"evt-{i}", f"cam-{i % 2}", "sess-1", i, "rule-1", "zone_entry", "person", 0.9, float(i), i, "clip" if i % 2 == 0 else None, f"/evidence/clip-{i}.mp4" if i % 2 == 0 else None, "{}"),
+            )
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO outbox (event_id, aggregate_type, payload) VALUES (%s, 'event', %s)",
+                (f"evt-{i}", "{}"),
+            )
+        conn.commit()
+
+    # Act 1: backup. The host psql wrapper is version-agnostic; run the dump
+    # through the pinned postgres image so client and server versions match.
+    dump_file = backup_dir / f"ava-{uuid.uuid4().hex[:8]}.dump"
+    dump = subprocess.run(
+        [*COMPOSE, "run", "--rm", "-e", "PGPASSWORD=test-only-postgres",
+         "--entrypoint", "pg_dump", "postgres",
+         "-h", "postgres", "-p", "5432", "-U", "ava", "-d", "ava", "-Fc"],
+        check=False,
+        capture_output=True,
+        timeout=600,
+    )
+    assert dump.returncode == 0, dump.stderr.decode()
+    with open(dump_file, "wb") as fh:
+        fh.write(dump.stdout)
+    assert dump_file.stat().st_size > 0, "empty dump"
+
+    # Act 2: restore drill (drop + recreate + restore + migrations).
+    rto_start = time.monotonic()
+    admin = _pg_connect(dbname="postgres")
+    admin.autocommit = True
+    try:
+        admin.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'ava' AND pid <> pg_backend_pid()"
+        )
+        admin.execute("DROP DATABASE ava WITH (FORCE)")
+        admin.execute("CREATE DATABASE ava OWNER ava")
+    finally:
+        admin.close()
+
+    # pg_restore in the pinned postgres:18 image does not honor "-" as stdin;
+    # bind-mount the dump file into the container and pass the path instead.
+    restore = subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "-e", "PGPASSWORD=test-only-postgres",
+            "--entrypoint", "pg_restore",
+            "--network", _project_network(ops_stack),
+            "--mount", f"type=bind,source={dump_file},target=/tmp/restore.dump,readonly",
+            "postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6",
+            "-h", "postgres", "-p", "5432", "-U", "ava", "-d", "ava",
+            "--no-owner", "/tmp/restore.dump",
+        ],
+        check=False,
+        capture_output=True,
+    )
+    if restore.returncode != 0:
+        # Record diagnostics for review; the compose project and its network
+        # are still up at this point.
+        diag = subprocess.run(
+            ["docker", "network", "ls", "--format", "{{.Name}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        (EVIDENCE_DIR / "restore-diag.txt").write_text(
+            f"project={ops_stack}\nnetworks:\n{diag.stdout}\nstderr:\n{restore.stderr.decode()}"
+        )
+    assert restore.returncode == 0, restore.stderr.decode()
+
+    alembic_restore = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+    assert alembic_restore.returncode == 0, alembic_restore.stderr
+
+    rto_s = round(time.monotonic() - rto_start, 2)
+
+    # Record the RTO data point as an evidence artifact (no hard bound asserted;
+    # thresholds are provisional under B-003/B-004/B-009).
+    with _pg_connect() as conn:
+        ev_rows = conn.execute("SELECT count(*) FROM events").fetchone()[0]
+        ob_rows = conn.execute("SELECT count(*) FROM outbox").fetchone()[0]
+    rto_file = EVIDENCE_DIR / f"rto-{uuid.uuid4().hex[:8]}.json"
+    rto_file.write_text(
+        json.dumps(
+            {"rto_seconds": rto_s, "dump": str(dump_file), "events_rows": ev_rows, "outbox_rows": ob_rows},
+            indent=2,
+        )
+    )
+
+    # Assert: row-level consistency after restore.
+    with _pg_connect() as conn:
+        events_rows = conn.execute("SELECT count(*) FROM events").fetchone()[0]
+        outbox_rows = conn.execute("SELECT count(*) FROM outbox").fetchone()[0]
+        orphan_outbox = conn.execute(
+            "SELECT count(*) FROM outbox o LEFT JOIN events e ON e.event_id = o.event_id WHERE e.event_id IS NULL"
+        ).fetchone()[0]
+        evidence_events = conn.execute(
+            "SELECT count(*) FROM events WHERE evidence_path IS NOT NULL"
+        ).fetchone()[0]
+    assert events_rows == 5, f"expected 5 events after restore, got {events_rows}"
+    assert outbox_rows == 5, f"expected 5 outbox rows after restore, got {outbox_rows}"
+    assert orphan_outbox == 0, f"{orphan_outbox} outbox rows reference missing events"
+    assert evidence_events == 3, f"expected 3 events with evidence_path, got {evidence_events}"
+
+    # Assert: RTO data point recorded in the per-run evidence directory.
+    rto_files = sorted(EVIDENCE_DIR.glob("rto-*.json"))
+    assert rto_files, "no RTO evidence artifact written"
+    rto = json.loads(rto_files[-1].read_text())
+    assert rto["rto_seconds"] > 0
+    assert rto["events_rows"] == 5
+    assert rto["outbox_rows"] == 5

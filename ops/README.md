@@ -114,6 +114,20 @@ Grafana alerting is out of scope for this slice (B-024 parent tracks notificatio
 
 Loki, Grafana or Prometheus failure must not stop analytics: the runtime has no dependency on any of them (B-021). Stop any subset with `docker compose -f ops/docker-compose.yml stop loki grafana` and verify a live run still completes.
 
+## Backup and restore drill
+
+The events database is backed up with a logical `pg_dump -Fc` dump via `ops/backup.sh`. Dumps land in git-ignored `ops/backups/` (or `AVA_BACKUP_DIR`); the script keeps the last N dumps (default 3, override with `AVA_BACKUP_KEEP`) and deletes older ones. The Keycloak identity database is a separate project and is not covered by this drill.
+
+```bash
+# credentials: ops/.env or environment (POSTGRES_PASSWORD / AVA_PG_PASSWORD)
+make db-backup                                  # dump + keep-last-N retention
+make db-restore-drill DUMP=ops/backups/ava-<stamp>.dump
+```
+
+The restore drill drops and recreates the `ava` database, restores the dump, re-applies `alembic upgrade head`, and verifies row-level consistency: event/outbox counts, foreign-key integrity (every outbox row references an existing event) and evidence-column integrity (events with an evidence kind always carry a path). The measured recovery time is recorded as an RTO data point under the evidence directory; no hard bound is asserted while thresholds remain provisional.
+
+The infrastructure suite includes a backup/restore drill against its disposable stack: it seeds representative rows, backs up, destroys and restores the database, then proves consistency and records RTO in the per-run evidence directory.
+
 ## Isolated infrastructure checks
 
 Run `make test-infra` with Docker Engine and Compose available. The suite creates a uniquely named disposable copy of the ops project, including PostgreSQL, with test-only credentials, private volumes/configuration and dynamically assigned loopback ports. It does not require or modify `ops/.env` or start, stop or restart the shared `ava-ops` deployment. Configuration is rendered before startup; partial setup failures also trigger cleanup of test-owned resources. Alloy discovery is restricted to the test project.

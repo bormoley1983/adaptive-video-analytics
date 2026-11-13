@@ -38,6 +38,9 @@ benchmarks/**/*.jsonl
 src/ava.egg-info/
 build/
 
+# Ops backup dumps (B-024-S2); private evidence, referenced by path only.
+ops/backups/
+
 # Packaged acceptance gate: isolated venv is rebuilt by `make test-packaged`.
 .venv-packaged/
 

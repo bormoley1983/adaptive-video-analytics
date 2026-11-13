@@ -2,7 +2,7 @@ PYTHON ?= python3
 PYTEST := $(PYTHON) -m pytest
 DEV_IMAGE ?= ava/dev:local
 
-.PHONY: help install-dev dev-image lint test test-unit test-integration test-e2e test-infra test-coverage test-packaged lint-docker test-coverage-docker up down status probe
+.PHONY: help install-dev dev-image lint test test-unit test-integration test-e2e test-infra test-coverage test-packaged lint-docker test-coverage-docker up down status probe db-backup db-restore-drill
 
 help:
 	@echo "install-dev       Install the package and test harness"
@@ -20,6 +20,8 @@ help:
 	@echo "down              Tear down the study stack (volumes preserved)"
 	@echo "status            One-screen health table for the study stack"
 	@echo "probe             Probe all harness RTSP streams (codec/res/FPS/rate)"
+	@echo "db-backup         Logical pg_dump -Fc of the ops postgres (keep-last-N)"
+	@echo "db-restore-drill  Drop/recreate the ops DB, restore a dump, verify consistency"
 
 # Study-stack lifecycle (E-3-T5). Thin wrappers over harness/stack.sh, which is
 # idempotent and self-healing: it starts MediaMTX first, waits for health, then
@@ -35,6 +37,16 @@ status:
 
 probe:
 	./harness/probe.sh
+
+# Ops PostgreSQL backup and restore drill (B-024-S2). Credentials come from
+# ops/.env or the environment; dumps land in git-ignored ops/backups/ by
+# default (override with AVA_BACKUP_DIR).
+db-backup:
+	./ops/backup.sh backup
+
+db-restore-drill:
+	@test -n "$(DUMP)" || { echo "usage: make db-restore-drill DUMP=<dump-file>"; exit 2; }
+	./ops/backup.sh restore-drill $(DUMP)
 
 install-dev:
 	$(PYTHON) -m pip install -e '.[dev]'
