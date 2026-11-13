@@ -1,9 +1,11 @@
 # Architecture decision records
 
+Index: [index.md](index.md)
+
 ADRs describe a decision, its alternatives, consequences, validation, and revisit trigger. They are not proof that software has been implemented. Initial decisions below were prepared on 2026-10-19 from [ava-ideas.md](../ava-ideas.md).
 
 | ADR | Decision | Status | Primary epics |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | [ADR-1](adr/ADR-1.md) | Python modular PoC and small initial stack | Accepted; E-1 validated | E-1/E-2 |
 | [ADR-2](adr/ADR-2.md) | DeepStream candidate and independent GPU workers | Candidate; compatibility partial, capacity pending | E-3/E-4/E-6 |
 | [ADR-3](adr/ADR-3.md) | Detector adapters and explicit prompt profiles | Accepted for PoC; export path provisional | E-1/E-3/E-5 |
