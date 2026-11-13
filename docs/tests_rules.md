@@ -7,10 +7,10 @@ These rules apply to production changes, tests, reviews and coding-agent session
 | Command | Scope | Allowed dependencies |
 |---|---|---|
 | `make test-unit` | One function, method or class in isolation | Deterministic fixtures, fakes and temporary files; no network, models, GPU or services |
-| `make test-integration` | Multiple AVA components or one adapter boundary | Local processes, fakes, temporary storage and explicitly controlled test doubles |
+| `make test-integration` | Multiple AVA components or one adapter boundary | Local processes, fakes, temporary storage, explicitly controlled test doubles and test-owned services |
 | `make test-e2e` | Complete workflow through the packaged CLI/API with real artifacts | Declared models, media and runtime; GPU when the workflow requires it |
 | `make test-infra` | Image build, Compose/runtime, GPU, mounts and external-service contracts | The explicitly named host and infrastructure dependencies |
-| `make test-coverage` | Unit and integration coverage of production Python | No end-to-end or infrastructure prerequisites; at least 90% combined line and branch coverage |
+| `make test-coverage` | Unit and integration coverage of production Python | Unit/integration prerequisites, including declared test-owned services; at least 90% combined line and branch coverage |
 
 Unmarked pytest tests are unit tests. Mark higher-level tests with exactly one primary marker: `integration`, `e2e` or `infra`. A test belongs at the lowest level that can prove the behavior. Do not duplicate an assertion at every level unless each boundary can fail independently.
 
@@ -49,7 +49,7 @@ Generated adapters, defensive platform branches and hardware-only paths require 
 
 - Use fixed clocks, seeds, identifiers and tiny synthetic inputs for deterministic suites.
 - Keep shared fixtures behavior-neutral; scenario-specific values stay in the test.
-- Do not download assets or contact external systems from unit or integration tests.
+- Unit tests require no network or external services. Integration tests may use declared, test-owned local services; do not download assets or contact uncontrolled external systems. The real-identity integration checks require Docker and the cached image digests declared in `ops/keycloak-compose.yml`.
 - Keep secrets, private footage, model weights and generated results out of test fixtures and Git.
 - Assert outputs and evidence before deleting temporary resources.
 - Treat flaky tests as failures. Fix their clock, state or dependency boundary; do not add blind retries.
@@ -60,8 +60,6 @@ Use clear domain names so code and tests document themselves. Comments explain o
 
 ## Agent workflow
 
-Before changing code, an agent reads `AGENTS.md`, `docs/intro.md` when available, this file and the relevant ADRs. It checks the working tree and preserves unrelated or concurrent work.
+Follow [AGENTS.md](../AGENTS.md) for startup, approvals, checkpoints and handoff. Select the smallest suite that proves each changed boundary; apply the behavior and coverage requirements above to production changes.
 
-During implementation, the agent chooses the smallest proving suite, writes positive and negative cases with the behavior, and promotes a test to a higher level only when a real boundary requires it. It uses readable names before adding explanatory comments.
-
-Before handoff, the agent runs every affected suite, the coverage gate and lint where the environment permits. It reports exact commands and outcomes, including skipped or unavailable prerequisites. A task is not complete because tests were written; the relevant tests must pass and required exceptions must be documented.
+Run affected suites and, for production Python or test changes, coverage and lint where prerequisites permit. For documentation-only changes, validate the changed documentation and references; runtime suites are required only when runtime behavior is affected. Report exact commands, outcomes, failures, skips and unavailable prerequisites. Unrun checks are not passed; required checks must pass or their exceptions be documented.

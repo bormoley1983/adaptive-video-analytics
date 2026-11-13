@@ -18,7 +18,7 @@ At the time of this decision, `git ls-files` returned no tracked files, so no in
 4. In the remote session, read `docs/intro.md` first, confirm the transferred revision and record the tested code commit, container digest and fresh host manifest. Verify ignore rules before staging code.
 5. Continue updating the private daily logs. The owner manages subsequent manual synchronization and backups; Git does not provide documentation history or recovery for ignored files.
 
-Before the first code commit, verify `git ls-files docs` is empty and `git check-ignore` matches representative private files. Review staged paths with `git diff --cached --name-only`. Public Git status/diff cannot review changes inside ignored documentation; inspect those files directly.
+Before staging, verify tracked files under `docs/` are limited to `docs/tests_rules.md` and `docs/architecture/`, and `git check-ignore` matches representative private files. Review staged paths with `git diff --cached --name-only`. Public Git status/diff cannot review changes inside ignored documentation; inspect those files directly.
 
 ## Alternatives and consequences
 
