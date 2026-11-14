@@ -27,6 +27,11 @@ PASSWORD="${AVA_PG_PASSWORD:?AVA_PG_PASSWORD is required}"
 BACKUP_DIR="${AVA_BACKUP_DIR:-$(cd "$(dirname "$0")" && pwd)/backups}"
 KEEP="${AVA_BACKUP_KEEP:-3}"
 
+if [[ "$BACKUP_DIR" != /* ]]; then
+  printf 'AVA_BACKUP_DIR must be an absolute path\n' >&2
+  exit 2
+fi
+
 export PGPASSWORD="$PASSWORD"
 unset PGPASSFILE 2>/dev/null || true
 
@@ -69,6 +74,22 @@ cmd_backup() {
     done
   fi
   log "backup: done (keeping last $KEEP dumps)"
+
+  # Machine-readable last-success marker for the AvaBackupStale alert rule.
+  # The node-exporter textfile collector reads .prom files; Prometheus compares
+  # the file's mtime (node_textfile_mtime_seconds) against time() to detect
+  # stale backups.
+  local marker="$BACKUP_DIR/last-backup-epoch.prom"
+  local marker_tmp
+  marker_tmp="$(mktemp "$BACKUP_DIR/.last-backup-epoch.XXXXXX")"
+  if printf '# HELP ava_backup_last_success_epoch Unix epoch of last successful backup\n# TYPE ava_backup_last_success_epoch gauge\nava_backup_last_success_epoch %s\n' "$(date -u +%s)" > "$marker_tmp" \
+      && chmod 644 "$marker_tmp" \
+      && mv -f -- "$marker_tmp" "$marker"; then
+    log "backup: last-success marker written to $marker"
+  else
+    rm -f -- "$marker_tmp"
+    return 1
+  fi
 }
 
 cmd_restore_drill() {

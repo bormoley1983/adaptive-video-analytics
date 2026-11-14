@@ -1,0 +1,23 @@
+# Native Grafana notification policy provisioning.
+#
+# Routes all alerts to the ava-alerts contact point defined in
+# contact-points.yaml. The root policy catches every alert; severity-based
+# grouping keeps related alerts together in a single notification.
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: ava-alerts
+    group_by: ["alertname", "severity"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    mute_time_intervals: []
+    routes:
+      # Critical alerts get a shorter wait so they arrive faster.
+      - matchers:
+          - severity = critical
+        receiver: ava-alerts
+        group_wait: 10s
+        repeat_interval: 1h

@@ -9,6 +9,15 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Notification routing. Fired alerts are sent to Alertmanager,
+# which routes them to the configured webhook receiver. The Alertmanager
+# config lives in ops/alertmanager/alertmanager.yml and is configurable via
+# that file's route/receivers blocks.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 rule_files:
   - rules.yml
 
@@ -41,3 +50,25 @@ scrape_configs:
       - targets: ["postgres-exporter:9187"]
         labels:
           service: postgres
+
+  # Node exporter. Host filesystem metrics for volume-fill alerts
+  # and the textfile collector path for the backup-staleness marker.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node
+
+  # Grafana self-metrics. Service-to-service on the project network.
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+        labels:
+          service: grafana
+
+  # Alloy self-metrics. Alloy exposes its own telemetry on 12345.
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]
+        labels:
+          service: alloy

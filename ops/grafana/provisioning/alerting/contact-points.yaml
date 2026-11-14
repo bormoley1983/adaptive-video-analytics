@@ -1,0 +1,15 @@
+# Native Grafana alerts use the same operator endpoint as Prometheus alerts.
+# Grafana expands the required environment variable during provisioning.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ava-alerts
+    receivers:
+      - uid: ava-webhook
+        type: webhook
+        settings:
+          url: $AVA_ALERT_WEBHOOK_URL
+          httpMethod: POST
+          tlsConfig:
+            insecureSkipVerify: false

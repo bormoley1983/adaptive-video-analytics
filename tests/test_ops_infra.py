@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
@@ -27,6 +29,8 @@ POSTGRES_PORT = 0
 GRAFANA_PORT = 3000
 PROMETHEUS_PORT = 9090
 LOKI_PORT = 3100
+NGINX_IMAGE = "nginx@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11"
+WEBHOOK_URL = "http://webhook-sink:8080/alerts"
 
 
 def _docker_available() -> bool:
@@ -52,8 +56,9 @@ def _compose(*args: str) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def _http_get(url: str, timeout: float = 10.0) -> bytes:
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+def _http_get(url: str, timeout: float = 10.0, headers: dict[str, str] | None = None) -> bytes:
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
@@ -116,12 +121,14 @@ def ops_stack(tmp_path_factory):
         pytest.skip("Docker runtime unavailable")
     project = "ava-infra-" + uuid.uuid4().hex[:12]
     scratch = tmp_path_factory.mktemp(project)
-    EVIDENCE_DIR = Path(os.environ.get("AVA_TEST_EVIDENCE_DIR", "results/infra")) / project
+    EVIDENCE_DIR = Path(os.environ.get("AVA_TEST_EVIDENCE_DIR", "results/infra")).resolve() / project
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR = scratch
-    for directory in ("prometheus", "loki", "alloy", "grafana"):
+    for directory in ("prometheus", "loki", "alloy", "grafana", "alertmanager"):
         shutil.copytree(OPS_DIR / directory, scratch / directory)
-    # Restrict log discovery to this project instead of reading shared workloads.
+    backups = scratch / "custom-backups"
+    backups.mkdir()
+    _write_backup_marker(backups)
     alloy = scratch / "alloy/config.alloy"
     alloy.write_text(
         alloy.read_text().replace(
@@ -130,57 +137,87 @@ def ops_stack(tmp_path_factory):
             f'    values = ["com.docker.compose.project={project}"]\n  }}',
         )
     )
-    text = (OPS_DIR / "docker-compose.yml").read_text()
-    text = text.replace(
-        "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in ops/.env}", "test-only-postgres"
+    render_env = {
+        **os.environ,
+        "POSTGRES_PASSWORD": "test-only-postgres",
+        "GRAFANA_ADMIN_USER": "admin",
+        "GRAFANA_ADMIN_PASSWORD": "test-only-grafana",
+        "AVA_ALERT_WEBHOOK_URL": WEBHOOK_URL,
+        "AVA_BACKUP_DIR": str(backups),
+    }
+    rendered = subprocess.run(
+        ["docker", "compose", "--env-file", "/dev/null", "-f",
+         str(OPS_DIR / "docker-compose.yml"), "config", "--format", "json"],
+        env=render_env, capture_output=True, text=True, check=False, timeout=30,
     )
-    text = text.replace(
-        "${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in ops/.env}", "test-only-grafana"
-    )
-    text = text.replace("${GRAFANA_ADMIN_USER:-admin}", "admin")
-    config = yaml.safe_load(text)
+    assert rendered.returncode == 0, rendered.stderr
+    config = json.loads(rendered.stdout)
     config["name"] = project
+    for section in ("volumes", "networks", "configs"):
+        for name, resource in config.get(section, {}).items():
+            resource["name"] = f"{project}_{name}"
     for service in config["services"].values():
         service["restart"] = "no"
+        service["pull_policy"] = "never"
         service["ports"] = [
-            {"target": int(port.rsplit(":", 1)[1]), "published": "0", "host_ip": "127.0.0.1"}
+            {"target": port["target"], "published": "0", "host_ip": "127.0.0.1"}
             for port in service.get("ports", [])
         ]
-        # Rewrite relative volume mounts to point at the scratch copies so the
-        # test can patch config files without touching the shipped ops/ tree.
-        if "volumes" in service:
-            service["volumes"] = [
-                str(scratch / vol.split(":", 1)[0].lstrip("./"))
-                + ":"
-                + ":".join(vol.split(":")[1:])
-                if vol.startswith("./") and len(vol.split(":")) >= 2
-                else vol
-                for vol in service["volumes"]
-            ]
+        for mount in service.get("volumes", []):
+            if mount["type"] == "bind":
+                source = Path(mount["source"])
+                if source.is_relative_to(OPS_DIR):
+                    mount["source"] = str(scratch / source.relative_to(OPS_DIR))
+    node = config["services"]["node-exporter"]
+    node["command"] = ["--collector.textfile.directory=/textfile", "--no-collector.filesystem"]
+    node["volumes"] = [m for m in node["volumes"] if m["target"] != "/host"]
+    prom_path = scratch / "prometheus/prometheus.yml"
+    prom_config = yaml.safe_load(prom_path.read_text())
+    prom_config["global"].update(scrape_interval="2s", evaluation_interval="2s")
+    prom_path.write_text(yaml.safe_dump(prom_config, sort_keys=False))
+    am_path = scratch / "alertmanager/alertmanager.yml"
+    am_config = yaml.safe_load(am_path.read_text())
+    am_config["route"].update(group_wait="0s", group_interval="1s")
+    for route in am_config["route"].get("routes", []):
+        route.update(group_wait="0s", group_interval="1s")
+    am_path.write_text(yaml.safe_dump(am_config, sort_keys=False))
+    sink_config = scratch / "nginx.conf"
+    sink_config.write_text("""events {}
+http {
+ log_format alerts escape=json '{"body":"$request_body"}';
+ server { listen 8080; access_log /var/log/nginx/alerts.log alerts;
+  location /alerts { proxy_pass http://127.0.0.1:8081; } }
+ server { listen 127.0.0.1:8081; access_log off; return 204; }
+}
+""")
+    config["services"]["webhook-sink"] = {
+        "image": NGINX_IMAGE,
+        "pull_policy": "never",
+        "volumes": [f"{sink_config}:/etc/nginx/nginx.conf:ro"],
+        "healthcheck": {
+            "test": ["CMD", "wget", "-qO-", "http://127.0.0.1:8081"],
+            "interval": "2s", "timeout": "2s", "retries": 15,
+        },
+        "mem_limit": "128m",
+    }
     compose_file = scratch / "compose.yml"
     compose_file.write_text(yaml.safe_dump(config, sort_keys=False))
-    COMPOSE = [
-        "docker",
-        "compose",
-        "--env-file",
-        "/dev/null",
-        "--project-name",
-        project,
-        "-f",
-        str(compose_file),
-    ]
+    COMPOSE = ["docker", "compose", "--env-file", "/dev/null", "--project-name", project,
+               "-f", str(compose_file)]
     try:
-        rendered = _compose("config", "--quiet")
-        assert rendered.returncode == 0, rendered.stderr
+        checked = _compose("config", "--quiet")
+        assert checked.returncode == 0, checked.stderr
         up = _compose("up", "-d")
         assert up.returncode == 0, up.stderr
-        for service in ("postgres", "postgres-exporter", "prometheus", "loki", "alloy", "grafana"):
+        for service in config["services"]:
             _wait_healthy(service)
         _refresh_ports()
         yield project
     finally:
         try:
             _compose("logs", "--no-color")
+            sink_log = _compose("exec", "-T", "webhook-sink", "cat", "/var/log/nginx/alerts.log")
+            (EVIDENCE_DIR / "webhook-receipts.jsonl").write_text(sink_log.stdout)
         finally:
             cleanup = _compose("down", "--volumes", "--remove-orphans")
             COMPOSE = []
@@ -211,6 +248,8 @@ def test_all_services_healthy(ops_stack: str) -> None:
     assert "alloy" in services
     assert "postgres" in services
     assert "postgres-exporter" in services
+    assert "node-exporter" in services
+    assert "alertmanager" in services
     for entry in entries:
         if entry.get("Health"):
             assert entry["Health"] == "healthy", f"{entry['Name']} not healthy"
@@ -378,7 +417,7 @@ def test_state_persists_across_restart(ops_stack: str) -> None:
     # then restart the whole project and check the data is still there.
     restart = _compose("restart")
     assert restart.returncode == 0, f"compose restart failed: {restart.stderr}"
-    for service in ("postgres", "postgres-exporter", "prometheus", "loki", "alloy", "grafana"):
+    for service in ("postgres", "postgres-exporter", "prometheus", "loki", "alloy", "grafana", "node-exporter", "alertmanager"):
         _wait_healthy(service)
     _refresh_ports()
     with psycopg.connect(
@@ -554,7 +593,7 @@ def _wait_postgres_metrics(expected_up: int, expected_pg_up: int | None) -> None
 
 
 def _wait_rule_state(rule_name: str, expected: str) -> None:
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + 120
     observed = None
     while time.monotonic() < deadline:
         observed = _prometheus_rule_state(rule_name)
@@ -742,7 +781,7 @@ def test_backup_restore_drill_proves_consistency_and_records_rto(ops_stack: str)
 
     # Act 1: backup. The host psql wrapper is version-agnostic; run the dump
     # through the pinned postgres image so client and server versions match.
-    dump_file = backup_dir / f"ava-{uuid.uuid4().hex[:8]}.dump"
+    dump_file = (backup_dir / f"ava-{uuid.uuid4().hex[:8]}.dump").resolve()
     dump = subprocess.run(
         [*COMPOSE, "run", "--rm", "-e", "PGPASSWORD=test-only-postgres",
          "--entrypoint", "pg_dump", "postgres",
@@ -846,3 +885,264 @@ def test_backup_restore_drill_proves_consistency_and_records_rto(ops_stack: str)
     assert rto["rto_seconds"] > 0
     assert rto["events_rows"] == 5
     assert rto["outbox_rows"] == 5
+
+
+def _write_backup_marker(directory: Path, age_seconds: int = 0, epoch: int | None = None) -> Path:
+    marker = directory / "last-backup-epoch.prom"
+    temporary = directory / "backup-marker.tmp"
+    temporary.write_text(f"ava_backup_last_success_epoch {epoch or int(time.time())}\n")
+    stamp = time.time() - age_seconds
+    os.utime(temporary, (stamp, stamp))
+    temporary.replace(marker)
+    return marker
+
+
+def _wait_query_value(query: str, expected: float, timeout_s: int = 60) -> None:
+    deadline = time.monotonic() + timeout_s
+    observed = []
+    while time.monotonic() < deadline:
+        observed = [float(result["value"][1]) for result in _prometheus_query(query)]
+        if observed == [expected]:
+            return
+        time.sleep(1)
+    raise AssertionError(f"expected {query}={expected}; observed {observed}")
+
+
+def _wait_alert(rule_name: str, state: str, labels: dict[str, str], timeout_s: int = 90) -> None:
+    deadline = time.monotonic() + timeout_s
+    observed = []
+    inactive_since = None
+    while time.monotonic() < deadline:
+        payload = json.loads(_http_get(f"http://127.0.0.1:{PROMETHEUS_PORT}/api/v1/rules"))
+        rules = [rule for group in payload["data"]["groups"] for rule in group["rules"]
+                 if rule.get("name") == rule_name]
+        assert rules, f"loaded rule {rule_name} missing"
+        if any(rule["health"] == "unknown" for rule in rules):
+            time.sleep(1)
+            continue
+        assert all(rule["health"] == "ok" for rule in rules), rules
+        observed = [alert for rule in rules for alert in rule.get("alerts", [])
+                    if all(alert["labels"].get(key) == value for key, value in labels.items())]
+        if state == "inactive" and not observed:
+            inactive_since = inactive_since or time.monotonic()
+            if time.monotonic() - inactive_since >= 6:
+                return
+        else:
+            inactive_since = None
+        if state != "inactive" and any(alert["state"] == state for alert in observed):
+            return
+        time.sleep(1)
+    raise AssertionError(f"expected {rule_name}{labels} {state}; observed {observed}")
+
+
+@contextmanager
+def _short_alert_delays(*names: str, extra_labels: dict[str, str] | None = None):
+    path = CONFIG_DIR / "prometheus/rules.yml"
+    original = path.read_text()
+    rules = yaml.safe_load(original)
+    selected = [rule for group in rules["groups"] for rule in group["rules"]
+                if rule.get("alert") in names]
+    assert set(names) <= {rule["alert"] for rule in selected}
+    for rule in selected:
+        rule["for"] = "2s"
+        rule.setdefault("labels", {}).update(extra_labels or {})
+    try:
+        path.write_text(yaml.safe_dump(rules, sort_keys=False))
+        _reload_prometheus()
+        yield
+    finally:
+        path.write_text(original)
+        _reload_prometheus()
+
+
+def _webhook_receipt(token: str, status: str, timeout_s: int = 90) -> dict:
+    deadline = time.monotonic() + timeout_s
+    observed = []
+    while time.monotonic() < deadline:
+        log = _compose("exec", "-T", "webhook-sink", "cat", "/var/log/nginx/alerts.log")
+        assert log.returncode == 0, log.stderr
+        observed = []
+        for line in log.stdout.splitlines():
+            envelope = json.loads(line)
+            body = json.loads(envelope["body"])
+            observed.append(body)
+            for alert in body.get("alerts", []):
+                if alert["labels"].get("notification_test") == token and alert["status"] == status:
+                    return body
+        time.sleep(1)
+    raise AssertionError(f"no {status} webhook for {token}; observed {observed}")
+
+
+def test_new_alert_rules_loaded(ops_stack: str) -> None:
+    payload = json.loads(_http_get(f"http://127.0.0.1:{PROMETHEUS_PORT}/api/v1/rules"))
+    rules = [rule for group in payload["data"]["groups"] for rule in group["rules"]]
+    names = {rule["name"] for rule in rules}
+    assert {"AvaOpsVolumeFillHigh", "AvaBackupStale", "AvaOpsServiceDown"} <= names
+    severities = {rule["labels"]["severity"] for rule in rules if rule["name"] == "AvaOpsVolumeFillHigh"}
+    assert severities == {"warning", "critical"}
+
+
+@pytest.mark.parametrize("service", ["grafana", "alloy"])
+def test_ops_outage_fires_recovers_and_delivers_webhook(ops_stack: str, service: str) -> None:
+    token = uuid.uuid4().hex
+    selector = {"job": service, "notification_test": token}
+    with _short_alert_delays("AvaOpsServiceDown", extra_labels={"notification_test": token}):
+        for healthy in ("grafana", "alloy"):
+            _wait_query_value(f'up{{job="{healthy}"}}', 1)
+        _wait_alert("AvaOpsServiceDown", "inactive", selector)
+        try:
+            stopped = _compose("stop", service)
+            assert stopped.returncode == 0, stopped.stderr
+            _wait_query_value(f'up{{job="{service}"}}', 0)
+            _wait_alert("AvaOpsServiceDown", "firing", selector)
+            receipt = _webhook_receipt(token, "firing")
+            assert any(alert["labels"].get("job") == service for alert in receipt["alerts"])
+        finally:
+            started = _compose("start", service)
+            assert started.returncode == 0, started.stderr
+            _wait_healthy(service)
+            _refresh_ports()
+        _wait_query_value(f'up{{job="{service}"}}', 1)
+        _wait_alert("AvaOpsServiceDown", "inactive", selector)
+        _webhook_receipt(token, "resolved")
+
+
+@pytest.mark.parametrize("used_percent,severity,fstype", [
+    (85, None, "ext4"), (86, "warning", "ext4"), (95, "warning", "ext4"),
+    (96, "critical", "ext4"), (99, None, "tmpfs"), (99, None, "overlay"),
+])
+def test_volume_fill_thresholds_fire_and_recover(
+    ops_stack: str, used_percent: int, severity: str | None, fstype: str,
+) -> None:
+    path = CONFIG_DIR / "custom-backups/filesystem.prom"
+
+    def write_usage(used: int) -> None:
+        temporary = path.with_suffix(".tmp")
+        labels = f'device="fixture",fstype="{fstype}",mountpoint="/fixture"'
+        temporary.write_text(
+            f"node_filesystem_size_bytes{{{labels}}} 100\n"
+            f"node_filesystem_avail_bytes{{{labels}}} {100 - used}\n"
+        )
+        temporary.replace(path)
+        _wait_query_value('node_filesystem_avail_bytes{device="fixture"}', 100 - used)
+
+    with _short_alert_delays("AvaOpsVolumeFillHigh"):
+        try:
+            write_usage(used_percent)
+            for level in ("warning", "critical"):
+                _wait_alert("AvaOpsVolumeFillHigh", "firing" if severity == level else "inactive",
+                            {"device": "fixture", "severity": level})
+        finally:
+            write_usage(50)
+        _wait_alert("AvaOpsVolumeFillHigh", "inactive", {"device": "fixture"})
+        path.unlink()
+
+
+@pytest.mark.parametrize("condition", ["stale", "missing"])
+def test_backup_age_or_missing_marker_fires_and_recovers(ops_stack: str, condition: str) -> None:
+    backups = CONFIG_DIR / "custom-backups"
+    selector = {"job": "node"}
+    with _short_alert_delays("AvaBackupStale"):
+        _write_backup_marker(backups, age_seconds=86300, epoch=1)
+        _wait_query_value('time() - node_textfile_mtime_seconds{job="node",file="/textfile/last-backup-epoch.prom"} < bool 86400', 1)
+        _wait_alert("AvaBackupStale", "inactive", selector)
+        try:
+            if condition == "stale":
+                _write_backup_marker(backups, age_seconds=86500)
+            else:
+                (backups / "last-backup-epoch.prom").unlink()
+            _wait_alert("AvaBackupStale", "firing", selector)
+        finally:
+            _write_backup_marker(backups, epoch=1)
+        _wait_alert("AvaBackupStale", "inactive", selector)
+
+
+def test_notification_resources_are_loaded(ops_stack: str) -> None:
+    auth = base64.b64encode(b"admin:test-only-grafana").decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    root = f"http://127.0.0.1:{GRAFANA_PORT}"
+    contact_points = json.loads(_http_get(f"{root}/api/v1/provisioning/contact-points", headers=headers))
+    contact = next(point for point in contact_points if point["uid"] == "ava-webhook")
+    assert contact["type"] == "webhook"
+    assert contact["settings"]["url"] == WEBHOOK_URL
+    policy = json.loads(_http_get(f"{root}/api/v1/provisioning/policies", headers=headers))
+    assert policy["receiver"] == contact["name"]
+    assert any(route["receiver"] == contact["name"] for route in policy["routes"])
+    datasources = json.loads(_http_get(f"{root}/api/datasources", headers=headers))
+    alertmanager = next(source for source in datasources if source["type"] == "alertmanager")
+    assert alertmanager["url"] == "http://alertmanager:9093"
+    assert alertmanager["jsonData"]["implementation"] == "prometheus"
+    loaded = _compose("exec", "-T", "alertmanager", "wget", "-qO-",
+                      "http://127.0.0.1:9093/api/v2/status")
+    assert loaded.returncode == 0, loaded.stderr
+    status = json.loads(loaded.stdout)
+    config = yaml.safe_load(status["config"]["original"])
+    assert config["route"]["receiver"] == "ava-webhook"
+    receiver = next(receiver for receiver in config["receivers"] if receiver["name"] == "ava-webhook")
+    assert receiver["webhook_configs"][0]["url_file"] == "/etc/alertmanager-webhook-url"
+
+
+def test_webhook_url_is_required() -> None:
+    env = {**os.environ, "POSTGRES_PASSWORD": "test-only-postgres",
+           "GRAFANA_ADMIN_PASSWORD": "test-only-grafana"}
+    env.pop("AVA_ALERT_WEBHOOK_URL", None)
+    rendered = subprocess.run(
+        ["docker", "compose", "--env-file", "/dev/null", "-f",
+         str(OPS_DIR / "docker-compose.yml"), "config", "--quiet"],
+        env=env, capture_output=True, text=True, check=False, timeout=30,
+    )
+    assert rendered.returncode != 0
+    assert "AVA_ALERT_WEBHOOK_URL" in rendered.stderr
+
+
+def test_backup_directory_override_updates_the_collected_success_marker(ops_stack: str) -> None:
+    backups = CONFIG_DIR / "custom-backups"
+    binaries = CONFIG_DIR / "backup-bin"
+    binaries.mkdir()
+    wrapper = binaries / "pg_dump"
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "if os.environ.get('AVA_TEST_DUMP_FAIL'):\n    sys.exit(7)\n"
+        "target = Path(sys.argv[sys.argv.index('-f') + 1])\n"
+        f"command = {COMPOSE!r} + ['exec', '-T', '-e', 'PGPASSWORD=test-only-postgres', "
+        "'postgres', 'pg_dump', '-U', 'ava', '-d', 'ava', '-Fc']\n"
+        "with target.open('wb') as output:\n"
+        "    result = subprocess.run(command, stdout=output, check=False)\n"
+        "sys.exit(result.returncode)\n"
+    )
+    wrapper.chmod(0o755)
+    env = {**os.environ, "PATH": f"{binaries}:{os.environ['PATH']}",
+           "AVA_PG_PASSWORD": "test-only-postgres", "AVA_BACKUP_DIR": str(backups)}
+    marker = _write_backup_marker(backups, age_seconds=86500)
+    previous_mtime = marker.stat().st_mtime_ns
+    failed = subprocess.run(
+        ["bash", str(OPS_DIR / "backup.sh"), "backup"], env={**env, "AVA_TEST_DUMP_FAIL": "1"},
+        capture_output=True, text=True, check=False, timeout=60,
+    )
+    assert failed.returncode == 7, failed.stderr
+    assert marker.stat().st_mtime_ns == previous_mtime
+
+    successful = subprocess.run(
+        ["bash", str(OPS_DIR / "backup.sh"), "backup"], env=env,
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    assert EVIDENCE_DIR is not None
+    (EVIDENCE_DIR / "backup-script.log").write_text(successful.stdout + successful.stderr)
+    assert successful.returncode == 0, successful.stderr
+    assert any(dump.stat().st_size > 0 for dump in backups.glob("ava-*.dump"))
+    assert marker.stat().st_mtime_ns > previous_mtime
+    _wait_query_value('time() - node_textfile_mtime_seconds{job="node",file="/textfile/last-backup-epoch.prom"} < bool 60', 1)
+    assert not list(backups.glob(".last-backup-epoch.*"))
+
+
+def test_backup_relative_directory_override_is_rejected(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["bash", str(OPS_DIR / "backup.sh"), "backup"], cwd=tmp_path,
+        env={**os.environ, "AVA_PG_PASSWORD": "test-only-postgres", "AVA_BACKUP_DIR": "relative-backups"},
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode != 0
+    assert "absolute" in result.stdout + result.stderr
+    assert not (tmp_path / "relative-backups").exists()

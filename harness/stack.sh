@@ -132,7 +132,7 @@ ensure_ops_env() {
   if [[ ! -f "${REPO_ROOT}/ops/.env" ]]; then
     if [[ -f "${REPO_ROOT}/ops/.env.example" ]]; then
       cp "${REPO_ROOT}/ops/.env.example" "${REPO_ROOT}/ops/.env"
-      warn "created ops/.env from .env.example (set GRAFANA_ADMIN_PASSWORD before relying on Grafana)"
+      warn "created ops/.env from .env.example; set passwords and AVA_ALERT_WEBHOOK_URL, and prepare the backup directory"
     else
       warn "ops/.env and ops/.env.example both missing; ops stack may fail to start"
     fi
@@ -192,6 +192,14 @@ start_publishers() {
 
 # --- observability -----------------------------------------------------------
 
+validate_ops_config() {
+  ensure_ops_env
+  if [[ -f "${OPS_COMPOSE}" ]]; then
+    docker compose -f "${OPS_COMPOSE}" config --quiet \
+      || die "ops configuration invalid; set required passwords and AVA_ALERT_WEBHOOK_URL in ops/.env"
+  fi
+}
+
 start_ops() {
   log "starting observability stack (Prometheus/Loki/Alloy/Grafana)"
   ensure_ops_env
@@ -238,6 +246,10 @@ cmd_up() {
 
   log "bringing up AVA study stack: ${n} camera(s), ops=$([[ ${use_ops} == 1 ]] && echo yes || echo no)"
 
+  if (( use_ops == 1 )); then
+    validate_ops_config
+  fi
+
   ensure_footage
   start_mediamtx
   local -a svcs=()
@@ -255,10 +267,18 @@ cmd_up() {
 
 cmd_down() {
   log "tearing down AVA study stack (volumes preserved)"
+  local failed=0
   if [[ -f "${OPS_COMPOSE}" ]]; then
-    docker compose -f "${OPS_COMPOSE}" down >/dev/null 2>&1 || true
+    if ! docker compose -f "${OPS_COMPOSE}" down; then
+      warn "ops teardown failed; check required settings in ops/.env and Docker diagnostics above"
+      failed=1
+    fi
   fi
-  docker compose -f "${HARNESS_COMPOSE}" down >/dev/null 2>&1 || true
+  if ! docker compose -f "${HARNESS_COMPOSE}" down; then
+    warn "harness teardown failed; check Docker diagnostics above"
+    failed=1
+  fi
+  (( failed == 0 )) || die "stack teardown incomplete"
   ok "stack is down"
 }
 

@@ -58,3 +58,56 @@ groups:
         annotations:
           summary: "PostgreSQL or its metrics exporter unavailable"
           description: "The PostgreSQL metrics exporter has been unreachable or unable to connect to the ops database for 2 minutes."
+
+  - name: ops-volume-and-backup
+    rules:
+      # Named volumes share their host backing filesystem; monitor host space.
+      - alert: AvaOpsVolumeFillHigh
+        expr: |
+          (1 - node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|overlay"}
+               / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|overlay"}) > 0.85
+          and
+          (1 - node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|overlay"}
+               / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|overlay"}) <= 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host filesystem usage above 85%"
+          description: "A host filesystem is more than 85% full. Check retention and disk capacity for the ops state volumes."
+
+      - alert: AvaOpsVolumeFillHigh
+        expr: |
+          (1 - node_filesystem_avail_bytes{job="node",fstype!~"tmpfs|overlay"}
+               / node_filesystem_size_bytes{job="node",fstype!~"tmpfs|overlay"}) > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host filesystem usage above 95%"
+          description: "A host filesystem is more than 95% full. Reclaim space or expand capacity before writes fail."
+
+      - alert: AvaBackupStale
+        expr: |
+          (time() - node_textfile_mtime_seconds{job="node",file=~".*last-backup-epoch\\.prom"} > 86400)
+          or
+          (up{job="node"} == 1
+            unless on(job, instance)
+            node_textfile_mtime_seconds{job="node",file=~".*last-backup-epoch\\.prom"})
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Successful backup marker missing or older than 24 hours"
+          description: "No readable success marker exists, or the last successful PostgreSQL backup is older than 24 hours. Check the backup schedule, directory and logs."
+
+  - name: ops-service-health
+    rules:
+      - alert: AvaOpsServiceDown
+        expr: up{job=~"grafana|alloy"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Grafana or Alloy unreachable"
+          description: "The Grafana or Alloy service has been unreachable for 5 minutes. These are required for dashboards and log forwarding."
