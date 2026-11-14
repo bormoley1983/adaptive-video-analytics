@@ -1,10 +1,10 @@
 # API acceptance evidence
 
-Reviewed against develop `30544b8` on 2026-11-14. Statuses: **satisfied** (supported by merged implementation and recorded validation), **waived-with-record** (explicit human rerun waiver), **deferred** (non-blocking owner decision) and **open** (acceptance incomplete).
+Reviewed on 2026-11-14. Historical evidence was reconciled against develop `30544b8`; new container-routing candidate evidence uses committed base `03d1fcb23f2c4c3c6a58d6e2b92ef18f634848a6`. Statuses: **satisfied** (supported by implementation and recorded validation), **waived-with-record** (explicit human rerun waiver), **deferred** (non-blocking owner decision) and **open** (acceptance incomplete). Candidate routing evidence is identified below; integration and broader candidate gates remain separate.
 
 Implementation coordinates: schema `9f522b2`; schema/service shell PR #33 `b24d0f6`; identity PR #35 `bb498bc`; request identification `8a8c969`; mutations PR #41 `3087d2a`; camera/event reads PR #38 `adde889`; real-provider and installed HTTP acceptance MR #47 `f2b2dfd`, merged as `9512ccc`. The [capability summary](api-foundation.md) describes their resulting behavior. Private planning mappings and raw evidence are excluded under [ADR-10](architecture/adr/ADR-10.md).
 
-Recorded MR #47 branch results: unit 712, integration 64, packaged 7, E2E 5, infrastructure 8, coverage 93.27% and lint passed. Completed develop reruns: unit 712, integration 64 and packaged 7. The human explicitly waived further develop E2E/infrastructure/coverage/lint reruns on 2026-11-08. These are historical records, not new runs; branch numbers are not develop passes. That waiver does not cover the open routing boundary.
+Recorded MR #47 branch results: unit 712, integration 64, packaged 7, E2E 5, infrastructure 8, coverage 93.27% and lint passed. Completed develop reruns: unit 712, integration 64 and packaged 7. The human explicitly waived further develop E2E/infrastructure/coverage/lint reruns on 2026-11-08. These are historical records, not new runs; branch numbers are not develop passes. That waiver did not cover the routing boundary; the separate new proof below supplies that evidence.
 
 ## Contract and schemas
 
@@ -35,10 +35,10 @@ The [real-provider module](../tests/test_real_identity_integration.py) has seven
 | Provider outage fails closed and recovers | `tests/test_real_identity_integration.py::test_provider_outage_fails_closed_and_recovers` | integration/real provider | satisfied |
 | Genuine expiry, tamper and wrong-audience rejection | `tests/test_real_identity_integration.py::test_expired_provider_token_is_rejected`, `tests/test_real_identity_integration.py::test_tampered_real_token_is_rejected`, `tests/test_real_identity_integration.py::test_real_token_with_wrong_audience_is_rejected` | integration/real provider | satisfied |
 | Installed API package and production lifespan | [Installed HTTP checks](../tests/test_api_acceptance_e2e.py) assert `installed_api_provenance`, non-editable imports and completed lifespan; packaged validation recorded seven passes on branch and develop | packaged/E2E host API process | satisfied |
-| API-container-to-provider routing | The [acceptance bootstrap](../tests/api_acceptance_support.py) launches host `sys.executable` and reaches a loopback-published Keycloak container. The cited evidence does not establish an API process inside a container reaching its provider. Owner: domain/infrastructure owner; recommendation: separately approved bounded routing proof or explicit owner disposition. | infrastructure/container routing | **open** |
+| API-container-to-provider routing | `tests/test_api_container_infra.py::test_installed_api_authenticates_over_owned_provider_network`: one passed case on the candidate base above. Non-editably installed API, fresh production JWKS verifier, human/service protected 200, missing-authentication 401, open health 200, exact Docker DNS/provider address, token/discovery/configured issuer agreement, module hashes, production lifespan and owned cleanup. | CPU-only infrastructure/container routing | satisfied by candidate proof |
 | Resource-level tenant/site isolation | `tests/test_api_acceptance_e2e.py::test_real_identity_without_camera_scope_cannot_discover_events` (other-tenant/other-site cases), `tests/test_api_acceptance_e2e.py::test_revocation_hides_history_and_regrant_restores_it` | installed HTTP E2E | satisfied |
 
-The real-provider and installed-package evidence supersedes earlier pending provider statements. Installed host-process provenance does not close the separate container-routing boundary; no routing waiver is inferred from the 2026-11-08 rerun waiver.
+The real-provider and installed-package evidence supersedes earlier pending provider statements. Installed host-process provenance remains separate from the new container proof; no routing waiver is inferred from the 2026-11-08 rerun waiver.
 
 ## Request identity and concurrent mutations
 
@@ -60,8 +60,14 @@ The real-provider and installed-package evidence supersedes earlier pending prov
 
 ## Validation record and acceptance result
 
-Schema, authorization, errors, pagination and boundaries were validated at the levels in [test rules](tests_rules.md). MR #47 recorded the separate branch suites and completed develop reruns listed above; further develop E2E/infrastructure/coverage/lint reruns were explicitly waived on 2026-11-08. Historical raw logs remain private. No runtime suite was rerun for this documentation revision.
+Schema, authorization, errors, pagination and boundaries were validated at the levels in [test rules](tests_rules.md). MR #47 recorded the separate branch suites and completed develop reruns listed above; further develop E2E/infrastructure/coverage/lint reruns were explicitly waived on 2026-11-08. Historical raw logs remain private. The new routing candidate passed one infrastructure case and 19 focused helper/provenance unit cases. Broader candidate suites and combined-state checks are separate validation gates.
 
-- **Open criteria: one.** API-container-to-provider routing remains incomplete. Owner: domain/infrastructure owner; recommendation: separately approved bounded proof or explicit owner disposition.
+- **Open criteria: none in the recorded API foundation scope.** Container routing is satisfied by the bounded candidate proof; integration and combined-state validation remain pending.
 - **Deferred, non-blocking:** movable-camera history and the domain-owner decision on permitting site-less access for site-restricted callers.
 - **Waived-with-record:** the named develop reruns after MR #47; this is not a routing waiver.
+
+## Container routing coordinates and limits
+
+The passing routing run used `python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704`, API image `sha256:cbd1d2fcc40e11ba3aff78899758830d31e9ff7cecd9c4c993babbd435a3c034`, and the exact Keycloak/PostgreSQL digests from [the identity stack](../ops/keycloak-compose.yml). Its unique network was `ava-identity-test-7baf974abc29` (`d5eb24fbe0f5d041a6871a43bf27e2ef9502b166a17f95aefc7ddf906f3ac202`); provider DNS resolved inside the API to its inspected owned address `192.168.112.3`. The internal issuer was `http://ava-identity-test-7baf974abc29-keycloak:8080/realms/acceptance`; host administration/token transport stayed on a dynamic loopback port. Docker client proxy injection was explicitly disabled for the API container; a focused unit assertion protects that option. The API imported production modules from `/usr/local/lib/python3.12/site-packages`; recorded hashes and startup/shutdown completion support installed execution. Exact owned resource IDs were confirmed absent after cleanup; private evidence retains full redacted build/runtime logs and lifecycle records.
+
+Run `python3 -m pytest -q tests/test_api_container_infra.py -m infra` with Docker, the cached pinned bases and declared Python-package installation access. This proof uses no event database, inference assets, GPU or checkout mount. It establishes only the CPU test-container identity path; it does not certify production TLS, deployment readiness, inference accuracy or capacity. Missing prerequisites fail rather than produce a passing skip. An initial pre-resource attempt failed because the installed Docker SDK lacks client context-manager support; explicit client closing corrected it before the recorded successful run.

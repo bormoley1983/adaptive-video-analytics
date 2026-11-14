@@ -144,3 +144,115 @@ def test_api_startup_failure_terminates_only_the_spawned_process(tmp_path, monke
         assert process.wait.call_count == 2
     else:
         process.wait.assert_called_once_with(timeout=10)
+
+
+@pytest.mark.parametrize("container_routing", [False, True])
+def test_identity_issuer_uses_opt_in_internal_address(tmp_path, container_routing):
+    stack = IdentityStack(tmp_path, container_routing=container_routing)
+    stack.base_url = "http://127.0.0.1:49152"
+
+    issuer = stack.issuer
+
+    base = f"http://{stack.name}-keycloak:8080" if container_routing else stack.base_url
+    assert issuer == base + "/realms/acceptance"
+    assert stack.jwks_uri == issuer + "/protocol/openid-connect/certs"
+    assert stack.base_url == "http://127.0.0.1:49152"
+
+
+@pytest.mark.parametrize("container_routing", [False, True])
+def test_identity_startup_configures_bounded_opt_in_network(tmp_path, monkeypatch, container_routing):
+    import api_acceptance_support as support
+
+    stack = IdentityStack(tmp_path, container_routing=container_routing)
+    docker = Mock()
+    network = docker.networks.create.return_value
+    network.name = stack.name
+    database, provider = Mock(), Mock()
+    provider.attrs = {"NetworkSettings": {"Ports": {"8080/tcp": [
+        {"HostIp": "127.0.0.1", "HostPort": "49152"},
+    ]}}}
+    docker.containers.create.side_effect = [database, provider]
+    monkeypatch.setattr(support.docker, "from_env", lambda: docker)
+    monkeypatch.setattr(support, "wait_until", Mock())
+    monkeypatch.setattr(stack, "wait_ready", Mock())
+    monkeypatch.setattr(stack, "_grant", Mock(return_value="temporary-admin-token"))
+    monkeypatch.setattr(stack, "admin", Mock())
+    monkeypatch.setattr(stack, "_configure_identities", Mock())
+    try:
+        stack._start()
+
+        database_options = docker.containers.create.call_args_list[0].kwargs
+        provider_options = docker.containers.create.call_args_list[1].kwargs
+        assert provider_options["ports"] == {"8080/tcp": ("127.0.0.1", None)}
+        assert stack.base_url == "http://127.0.0.1:49152"
+        if container_routing:
+            assert provider_options["environment"]["KC_HOSTNAME"] == (
+                f"http://{stack.name}-keycloak:8080")
+            assert provider_options["nano_cpus"] == 2_000_000_000
+            assert provider_options["mem_limit"] == "2g"
+            assert database_options["nano_cpus"] == 1_000_000_000
+            assert database_options["mem_limit"] == "512m"
+        else:
+            assert "KC_HOSTNAME" not in provider_options["environment"]
+            assert "nano_cpus" not in provider_options
+            assert provider_options["mem_limit"] == "1g"
+            assert database_options["mem_limit"] == "256m"
+    finally:
+        provider.logs.return_value = b"safe startup"
+        stack.close()
+
+    database.remove.assert_called_once_with(force=True, v=True)
+    provider.remove.assert_called_once_with(force=True, v=True)
+
+
+def test_api_container_startup_failure_removes_only_registered_resources(tmp_path, monkeypatch):
+    from test_api_container_infra import _running_container
+
+    stack = IdentityStack(tmp_path, container_routing=True)
+    docker = stack._docker = Mock()
+    network = stack._network = Mock()
+    api = MagicMock()
+    api.status = "created"
+    api.logs.return_value = b"safe startup failure"
+    api.start.side_effect = RuntimeError("injected container startup failure")
+    docker.containers.create.return_value = api
+    monkeypatch.setattr(stack, "_start", lambda: None)
+
+    with (pytest.raises(RuntimeError, match="injected container startup failure"), stack,
+          _running_container(stack, Mock(), tmp_path)):
+        pytest.fail("Failed startup must not yield a client")
+
+    assert docker.containers.create.call_args.kwargs["use_config_proxy"] is False
+    api.remove.assert_called_once_with(force=True, v=True)
+    api.stop.assert_not_called()
+    network.remove.assert_called_once_with()
+    docker.close.assert_called_once_with()
+    assert stack.events[-1] == "cleaned"
+
+
+def test_api_container_context_excludes_private_and_untracked_files(tmp_path, monkeypatch):
+    import tarfile
+
+    import test_api_container_infra as container_support
+
+    paths = ["pyproject.toml", "README.md", "tests/Dockerfile.api-container",
+             "tests/fixtures/packaged_api_requirements.txt", "tests/api_http_bootstrap.py",
+             "tests/api_container_bootstrap.py", "src/ava/api/openapi.yaml", "src/ava/__init__.py",
+             "src/ava/private.key", "docs/private.md", "results/private.json"]
+    for name in paths:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("synthetic public input" if "private" not in name else "private input")
+    monkeypatch.setattr(container_support, "ROOT", tmp_path)
+    monkeypatch.setattr(container_support.subprocess, "check_output", lambda *a, **kw: (
+        b"src/ava/api/openapi.yaml\0src/ava/__init__.py\0src/ava/private.key\0"))
+
+    context, included = container_support._build_context()
+    with context, tarfile.open(fileobj=context) as archive:
+        members = archive.getnames()
+
+    assert members == included
+    assert "src/ava/api/openapi.yaml" in members
+    assert "src/ava/private.key" not in members
+    assert "docs/private.md" not in members
+    assert "results/private.json" not in members
