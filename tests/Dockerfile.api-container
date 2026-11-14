@@ -1,0 +1,10 @@
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+WORKDIR /build
+COPY tests/fixtures/packaged_api_requirements.txt /build/requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md /build/
+COPY src /build/src
+RUN python -m pip install --no-cache-dir --no-deps . && rm -rf /build
+COPY tests/api_http_bootstrap.py tests/api_container_bootstrap.py /opt/ava-test/
+WORKDIR /opt/ava-test
+ENTRYPOINT ["python", "-u", "/opt/ava-test/api_container_bootstrap.py"]

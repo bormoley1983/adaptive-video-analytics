@@ -1,6 +1,6 @@
 # API foundation
 
-Status: implemented; acceptance remains incomplete for one container-to-provider routing criterion. Evidence reviewed against develop `30544b8` on 2026-11-14.
+Status: implemented; the remaining container-to-provider routing criterion passed on 2026-11-14 using the routing candidate based on develop `03d1fcb23f2c4c3c6a58d6e2b92ef18f634848a6`. Integration and broader candidate validation remain separate gates.
 
 ## Implemented scope
 
@@ -20,7 +20,7 @@ Keycloak is the initial deployment identity provider behind a provider-independe
 
 [Real-provider checks](../tests/test_real_identity_integration.py) cover human/service tokens, camera scope, tamper/audience rejection, rotation with previous-token validity, genuine expiry and outage/recovery. Seven functions yield nine parametrized cases. [Installed HTTP checks](../tests/test_api_acceptance_e2e.py) contain four functions yielding five cases and prove non-editable package execution, production lifespan and protected event retrieval with the real verifier.
 
-The installed HTTP workflow runs the API as a host Python subprocess and reaches a containerized provider over loopback. It does not establish API-container-to-provider routing. That criterion remains open; owner: domain/infrastructure owner. Recommendation: complete a separately approved bounded routing proof or record an explicit owner disposition before declaring acceptance complete.
+The installed HTTP workflow runs the API as a host Python subprocess and reaches a containerized provider over loopback. The separate [container routing check](../tests/test_api_container_infra.py) now proves a CPU-only, non-editably installed API container authenticates real human/service requests through the production verifier to disposable Keycloak over an owned Docker network. Issuer agreement, exact provider DNS/address, installed hashes, open health, missing-authentication denial and production lifespan completion are asserted. This satisfies the container-routing criterion without establishing production TLS or deployment readiness.
 
 ## Request identity and concurrent mutations
 
@@ -34,6 +34,6 @@ Movable-camera history is deferred to a future approved use case. Whether site-r
 
 ## Recorded validation and limits
 
-MR #47 candidate `f2b2dfd`, merged as `9512ccc`, recorded unit 712, integration 64, packaged 7, E2E 5, infrastructure 8, coverage 93.27% and lint passed. Completed develop reruns recorded unit 712, integration 64 and packaged 7. The human explicitly waived further develop E2E, infrastructure, coverage and lint reruns on 2026-11-08. Branch results are not develop passes; the waiver does not cover the missing container-routing proof.
+MR #47 candidate `f2b2dfd`, merged as `9512ccc`, recorded unit 712, integration 64, packaged 7, E2E 5, infrastructure 8, coverage 93.27% and lint passed. Completed develop reruns recorded unit 712, integration 64 and packaged 7. The human explicitly waived further develop E2E, infrastructure, coverage and lint reruns on 2026-11-08. Branch results are not develop passes; the waiver did not cover the separate container-routing proof.
 
-The real-provider and installed HTTP evidence resolves earlier pending validation statements. It does not prove the missing container boundary. No runtime implementation or runtime rerun was performed by this documentation review. Separate operational acceptance covers alerts, retention and backup/restore; this review does not certify inference quality, media availability or capacity. Historical raw logs and planning mappings remain private under [ADR-10](architecture/adr/ADR-10.md).
+The real-provider and installed HTTP evidence resolves earlier pending validation statements. The new routing infrastructure check passed one case; focused helper/provenance unit regressions passed 19 cases. The routing evidence records exact owned-container/network cleanup. These new results are candidate evidence on the stated committed base, distinct from the historical merge results and rerun waiver. Separate operational acceptance covers alerts, retention and backup/restore; this review does not certify inference quality, media availability or capacity. Historical raw logs and planning mappings remain private under [ADR-10](architecture/adr/ADR-10.md).

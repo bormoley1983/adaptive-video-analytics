@@ -58,8 +58,9 @@ def _attribute_mapper(claim: str, *, multiple: bool = False) -> dict:
 class IdentityStack:
     """Own exactly one network, identity database and Keycloak container."""
 
-    def __init__(self, evidence_root: Path | None = None):
+    def __init__(self, evidence_root: Path | None = None, *, container_routing: bool = False):
         self.name = "ava-identity-test-" + uuid.uuid4().hex[:12]
+        self.container_routing = container_routing
         self.evidence_root = evidence_root or Path(
             os.environ.get("AVA_TEST_IDENTITY_EVIDENCE_DIR", "results/identity-acceptance")
         )
@@ -82,7 +83,9 @@ class IdentityStack:
 
     @property
     def issuer(self) -> str:
-        return f"{self.base_url}/realms/{REALM}"
+        base = (f"http://{self.name}-keycloak:8080"
+                if self.container_routing else self.base_url)
+        return f"{base}/realms/{REALM}"
 
     @property
     def jwks_uri(self) -> str:
@@ -115,7 +118,8 @@ class IdentityStack:
             network=self._network.name, hostname="identity-postgres",
             environment={"POSTGRES_USER": "identity", "POSTGRES_DB": "identity",
                          "POSTGRES_PASSWORD": self.database_password},
-            mem_limit="256m",
+            mem_limit="512m" if self.container_routing else "256m",
+            **({"nano_cpus": 1_000_000_000} if self.container_routing else {}),
         )
         self._containers.append(database)
         database.start()
@@ -138,8 +142,11 @@ class IdentityStack:
                 "KC_HOSTNAME_STRICT": "false",
                 "KC_HTTP_ENABLED": "true",
                 "JAVA_OPTS_KC_HEAP": "-Xms128m -Xmx512m",
+                **({"KC_HOSTNAME": f"http://{self.name}-keycloak:8080"}
+                   if self.container_routing else {}),
             },
-            mem_limit="1g",
+            mem_limit="2g" if self.container_routing else "1g",
+            **({"nano_cpus": 2_000_000_000} if self.container_routing else {}),
         )
         self._containers.append(self.keycloak)
         self.keycloak.start()
