@@ -1,6 +1,6 @@
 # ADR-15: local containerized operations and PostgreSQL persistence
 
-Date: 2026-10-23 · Revised: 2026-10-23 (SeaweedFS and deferred Kafka) · Status: Accepted for staged implementation · Scope: E-3, F-1, F-3, F-5 and E-6.
+Date: 2026-10-23 · Revised: 2026-11-14 (host exporter and notification routing) · Status: Accepted for staged implementation · Scope: E-3, F-1, F-3, F-5 and E-6.
 
 ## Context
 
@@ -21,6 +21,8 @@ Use a separate CPU-only Docker Compose project for AVA's local operational depen
 The durable evidence profile later adds SeaweedFS as the selected S3-compatible object store. It is staged with F-3-S2 after the PostgreSQL event/outbox slice, not added to the P0 B-022 observability task. `LocalEvidenceStore` remains the deterministic test/offline adapter; `S3EvidenceStore` targets SeaweedFS for the service path. PostgreSQL stores evidence metadata and lifecycle state while SeaweedFS stores bytes.
 
 Add PostgreSQL-metrics and GPU/host exporters only when their compatibility and required privileges are validated. Pin every adopted image by tested version and digest. Persist service state in named volumes. Bind browser and management endpoints to `127.0.0.1` by default. Inject development credentials through ignored runtime configuration; never commit real credentials or expose the study stack to the LAN by default.
+
+The operations profile includes Node Exporter for host filesystem capacity and backup-success textfile metrics, with read-only host-root and backup-directory mounts and no published host port. Treat that host access as privileged alongside Alloy's read-only Docker socket. Prometheus sends alerts to a project-local Alertmanager, which delivers fired and resolved notifications to a required operator-supplied webhook. Grafana provisions an external Alertmanager datasource to inspect that path; its built-in contact point and policies separately handle Grafana-managed alerts. Both notification managers use the same configured endpoint, and neither is an inference or event-persistence dependency.
 
 PostgreSQL is the only database engine implemented for the service path. Core code depends on narrow domain ports—event sink/repository, incident repository, unit of work/outbox and evidence store—rather than PostgreSQL client DTOs. This is separation of responsibilities, not a promise of interchangeable database engines. Variable event/model fields may use validated `jsonb`; stable identity, time, ownership, lifecycle and relationship fields remain typed columns with constraints and indexes.
 

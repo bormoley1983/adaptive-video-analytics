@@ -14,3 +14,13 @@ datasources:
     access: proxy
     url: http://loki:3100
     editable: false
+
+  - name: Alertmanager
+    uid: ava-alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

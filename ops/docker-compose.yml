@@ -109,7 +109,7 @@ services:
   alloy:
     image: grafana/alloy@sha256:89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18
     restart: on-failure
-    command: ["run", "/etc/alloy/config.alloy"]
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "/etc/alloy/config.alloy"]
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       # Read-only Docker socket for container log discovery. Treated as
@@ -141,6 +141,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in ops/.env}
+      - AVA_ALERT_WEBHOOK_URL=${AVA_ALERT_WEBHOOK_URL:?set AVA_ALERT_WEBHOOK_URL in ops/.env}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
@@ -162,8 +163,62 @@ services:
       start_period: 30s
     mem_limit: 1g
 
+  # Node exporter for host filesystem metrics. Provides disk-space
+  # data for the AvaOpsVolumeFillHigh alert and a textfile collector path for
+  # the backup-staleness marker. Host fs access is required; the risk is
+  # documented in ops/README.md alongside the Alloy docker.sock mount.
+  node-exporter:
+    image: prom/node-exporter@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    restart: on-failure
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.textfile.directory=/textfile"
+    volumes:
+      - /:/host:ro
+      - type: bind
+        source: ${AVA_BACKUP_DIR:-./backups}
+        target: /textfile
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9100/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 128m
+
+  # Alertmanager for notification routing. Receives fired alerts
+  # from Prometheus and dispatches them to the configured webhook receiver.
+  # No host port is published; it is reachable only within the project network.
+  alertmanager:
+    image: prom/alertmanager@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
+    restart: on-failure
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+      - ops-alertmanager:/alertmanager
+    configs:
+      - source: ava-alert-webhook
+        target: /etc/alertmanager-webhook-url
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    mem_limit: 128m
+
+configs:
+  ava-alert-webhook:
+    content: ${AVA_ALERT_WEBHOOK_URL:?set AVA_ALERT_WEBHOOK_URL in ops/.env}
+
 volumes:
   ops-postgres:
   ops-prometheus:
   ops-loki:
   ops-grafana:
+  ops-alertmanager:

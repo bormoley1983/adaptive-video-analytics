@@ -1,18 +1,21 @@
 # AVA local observability platform (B-022)
 
-CPU-only Docker Compose project for AVA's local operational dependencies, separate from the GPU analytics worker and the RTSP replay harness (ADR-15). Services: **PostgreSQL** (events), **Postgres Exporter** (metrics), **Prometheus** (metrics), **Grafana** (dashboards), **Loki** (logs), **Alloy** (Docker log discovery/forwarding).
+CPU-only Docker Compose project for AVA's local operational dependencies, separate from the GPU analytics worker and the RTSP replay harness (ADR-15). Services: **PostgreSQL** (events), **Postgres Exporter** (metrics), **Prometheus** (metrics), **Grafana** (dashboards), **Loki** (logs), **Alloy** (Docker log discovery/forwarding), **Node Exporter** (host filesystem and backup-marker metrics), **Alertmanager** (Prometheus alert notifications).
 
 ## Lifecycle
 
 ```bash
-cp ops/.env.example ops/.env        # set GRAFANA_ADMIN_PASSWORD and POSTGRES_PASSWORD
+cp ops/.env.example ops/.env        # set passwords and AVA_ALERT_WEBHOOK_URL
+mkdir -p ops/backups               # or create your absolute AVA_BACKUP_DIR
 docker compose -f ops/docker-compose.yml up -d
 docker compose -f ops/docker-compose.yml ps          # health status
 docker compose -f ops/docker-compose.yml logs -f alloy   # collection debug
 docker compose -f ops/docker-compose.yml down         # stop (volumes persist)
 ```
 
-State persists in named volumes (`ops-postgres`, `ops-prometheus`, `ops-loki`, `ops-grafana`). `down` without `-v` keeps data; restarts reload it.
+Docker Compose 2.23.1 or later is required for inline configuration. Set `AVA_ALERT_WEBHOOK_URL` to an HTTP(S) receiver reachable from the project network before starting the stack; startup fails if it is empty. A host receiver must use an address reachable from the containers; `localhost` and `127.0.0.1` refer to each container.
+
+State persists in named volumes (`ops-postgres`, `ops-prometheus`, `ops-loki`, `ops-grafana`, `ops-alertmanager`). `down` without `-v` keeps data; restarts reload it.
 
 ## Ports (all bound to 127.0.0.1 only)
 
@@ -23,7 +26,7 @@ State persists in named volumes (`ops-postgres`, `ops-prometheus`, `ops-loki`, `
 | Prometheus | 9090      | Metrics queries, target health   |
 | Loki       | 3100      | Log API (used by Grafana/Alloy)  |
 
-The Postgres Exporter runs on port 9187 inside the project network only; it is not published to the host. Prometheus scrapes it via the `postgres-exporter` service name.
+The Postgres Exporter (9187), Node Exporter (9100), Alertmanager (9093) and Alloy HTTP server (12345) are reachable only on the project network; none publishes a host port. Prometheus scrapes exporters and Alloy by their service names. Loopback addresses in healthchecks and the Prometheus self-scrape intentionally target the same container.
 
 Service-to-service traffic uses the `ava-ops` project network; no service is reachable from the LAN. The optional worker Compose override joins that network for PostgreSQL access; see the root README for its invocation.
 
@@ -71,6 +74,10 @@ Alloy tails logs of containers whose names match `^ava-.*` via the Docker socket
 
 Read-only socket access still allows listing containers and reading their logs — treat Alloy as a privileged component of the study stack. It runs only on this development host, binds no public ports, and is not a production security template.
 
+### Host filesystem access (ADR-15)
+
+Node Exporter mounts the host root filesystem read-only at `/host` and the backup directory at `/textfile`. This exposes host filesystem metadata to the exporter and its project-network peers; treat it as privileged operational access, alongside Alloy's Docker socket. The filesystem alert monitors backing host filesystems rather than individual Docker named-volume mountpoints; tmpfs and overlay filesystems are excluded. Named volumes use their backing filesystem's available space and need not be overlayfs-backed.
+
 ## Pinned images
 
 | Service    | Version | Digest (sha256)                                                        |
@@ -80,13 +87,15 @@ Read-only socket access still allows listing containers and reading their logs �
 | Loki       | 3.7.9   | `0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28`     |
 | Alloy      | 1.21.2  | `89a5a320168387336b9ac3c850609c3ba7757eadd4ae5f1d819deb35e9854b18`     |
 | Postgres Exporter | 0.20.1 | `ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e`  |
+| Node Exporter | 1.12.1   | `1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0`  |
+| Alertmanager | 0.35.0 | `e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c` |
 
 Re-pin after an upstream update: pull the new image, verify it, replace the `@sha256:` reference and this table.
 
 ## Measuring host overhead
 
 ```bash
-# idle CPU/RAM of the four containers (repeat for a few minutes)
+# idle CPU/RAM of the ops containers (repeat for a few minutes)
 docker stats --no-stream $(docker compose -f ops/docker-compose.yml ps -q)
 # disk growth of the state volumes
 du -sh /var/lib/docker/volumes/ops-prometheus /var/lib/docker/volumes/ops-loki /var/lib/docker/volumes/ops-grafana
@@ -96,7 +105,7 @@ Record results in `docs/progress/YYYY-MM-DD.md`. Retention is 7 days for both Pr
 
 ## Alert rules
 
-Prometheus alert rules are defined in `ops/prometheus/rules.yml` and loaded via `rule_files` in `prometheus.yml`. Five initial rules ship with this slice; thresholds are provisional pending B-003/B-009 owner inputs.
+Prometheus alert rules are defined in `ops/prometheus/rules.yml` and loaded via `rule_files` in `prometheus.yml`. Nine rule definitions (eight alert names) ship with this slice; thresholds are provisional pending B-003/B-009 owner inputs.
 
 | Rule | Expression | For | Severity |
 | ------ | ----------- | ----- | ---------- |
@@ -105,10 +114,20 @@ Prometheus alert rules are defined in `ops/prometheus/rules.yml` and loaded via 
 | `PrometheusTSDBCompactionsFailing` | `rate(prometheus_tsdb_compactions_failed_total[10m]) > 0` | 10m | warning |
 | `LokiRequestErrorsHigh` | Loki 5xx rate > 5% over 5m | 10m | warning |
 | `PostgresUnavailable` | `(up{job="postgres"} == 0) or (pg_up{job="postgres"} == 0)` | 2m | critical |
+| `AvaOpsVolumeFillHigh` | Host filesystem usage > 85% and ≤ 95% (excluding tmpfs/overlay) | 5m | warning |
+| `AvaOpsVolumeFillHigh` | Host filesystem usage > 95% (excluding tmpfs/overlay) | 5m | critical |
+| `AvaBackupStale` | Success marker missing or older than 24h, with exporter scrapeable | 30m | warning |
+| `AvaOpsServiceDown` | `up{job=~"grafana\|alloy"} == 0` | 5m | warning |
 
 The PostgreSQL alert checks both exporter scrape availability (`up`) and database connectivity (`pg_up`). Infrastructure checks stop and recover the disposable database and exporter separately, verifying that a database outage alerts even while the exporter remains scrapeable.
 
-Grafana alerting is out of scope for this slice (B-024 parent tracks notification routing).
+### Notification routing (B-024-S3)
+
+Prometheus sends fired and resolved alerts to `alertmanager:9093`. Alertmanager routes them to `ava-webhook`, using the required `AVA_ALERT_WEBHOOK_URL` value mounted by Compose as `/etc/alertmanager-webhook-url`. Root notifications wait 30s and repeat every 4h; critical notifications wait 10s and repeat every 1h. Neither receiver has a localhost fallback. Set the endpoint in `ops/.env` or export it before running Compose.
+
+Grafana provisions an external Alertmanager datasource (`ava-alertmanager`) for this notification path. Select **Alertmanager** in Grafana Alerting to inspect its notifications, silences and routing; Prometheus Alertmanager contact points and policies are read-only through Grafana. Grafana's built-in Alertmanager has its own provisioned `ava-alerts` webhook contact point and native policies, using the same endpoint via Grafana environment expansion. Those native policies apply to Grafana-managed alerts; they do not forward or override Prometheus alerts. No duplicate Grafana-managed copies of the Prometheus rules are provisioned.
+
+The node-exporter sidecar provides host filesystem metrics for the volume-fill alert and reads the backup-staleness marker (`ops/backups/last-backup-epoch.prom`) via its textfile collector path. The marker is a Prometheus-format `.prom` file atomically replaced by `ops/backup.sh` after each successful dump and retention cleanup. Prometheus compares the file's mtime against `time()`; the embedded epoch gauge is informational. Missing markers also alert, covering a never-run backup or an unreadable/deleted marker. Both missing and stale conditions must persist for 30m; age-based firing therefore begins after 24h plus that hold. Restoring a fresh marker resolves the alert. An unavailable exporter is a scrape-health failure, not proof of backup age.
 
 ## Outage semantics
 
@@ -118,8 +137,11 @@ Loki, Grafana or Prometheus failure must not stop analytics: the runtime has no 
 
 The events database is backed up with a logical `pg_dump -Fc` dump via `ops/backup.sh`. Dumps land in git-ignored `ops/backups/` (or `AVA_BACKUP_DIR`); the script keeps the last N dumps (default 3, override with `AVA_BACKUP_KEEP`) and deletes older ones. The Keycloak identity database is a separate project and is not covered by this drill.
 
+For a custom destination, `AVA_BACKUP_DIR` must be an absolute host path. Supply the same value to both Compose (environment or `ops/.env`) and the host-run backup command; the script does not read `ops/.env` itself. Node Exporter mounts that same directory read-only, so the success marker remains observable. Relative overrides are rejected by the backup script because Compose and a host shell otherwise resolve them differently. The default remains `ops/backups/`. Create the directory under the backup operator's account before starting Compose (`mkdir -p ops/backups`, or the absolute custom path). Compose refuses a missing directory instead of creating a root-owned directory that the backup command cannot write.
+
 ```bash
-# credentials: ops/.env or environment (POSTGRES_PASSWORD / AVA_PG_PASSWORD)
+# Export the ops database password; these commands do not read ops/.env.
+export AVA_PG_PASSWORD=YOUR_OPS_DATABASE_PASSWORD
 make db-backup                                  # dump + keep-last-N retention
 make db-restore-drill DUMP=ops/backups/ava-<stamp>.dump
 ```

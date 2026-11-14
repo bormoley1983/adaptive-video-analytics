@@ -1,0 +1,21 @@
+# Prometheus alerts are delivered to the operator-configured webhook.
+# Compose mounts the required AVA_ALERT_WEBHOOK_URL as a read-only URL file.
+
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: ava-webhook
+  routes:
+    - matchers:
+        - severity = critical
+      receiver: ava-webhook
+      group_wait: 10s
+      repeat_interval: 1h
+
+receivers:
+  - name: ava-webhook
+    webhook_configs:
+      - url_file: /etc/alertmanager-webhook-url
+        send_resolved: true

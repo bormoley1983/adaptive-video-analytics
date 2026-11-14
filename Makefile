@@ -38,9 +38,9 @@ status:
 probe:
 	./harness/probe.sh
 
-# Ops PostgreSQL backup and restore drill (B-024-S2). Credentials come from
-# ops/.env or the environment; dumps land in git-ignored ops/backups/ by
-# default (override with AVA_BACKUP_DIR).
+# Ops PostgreSQL backup and restore drill. Export AVA_PG_PASSWORD; these
+# commands do not load ops/.env. Dumps default to git-ignored ops/backups/
+# (override with the same absolute AVA_BACKUP_DIR used by Compose).
 db-backup:
 	./ops/backup.sh backup
 
