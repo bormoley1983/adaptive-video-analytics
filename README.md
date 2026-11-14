@@ -6,7 +6,7 @@ AVA is an independent, free/self-hosted video-analytics learning project. Its mi
 
 The implemented study paths include a single-camera offline proof of concept and a provisional multi-camera RTSP runner. Both support a **conventional** detector (YOLO26n + ByteTrack) or a **text-prompted** detector (YOLOE-26 small), plus line-crossing, zone-entry and dwell rules. The live runner separates decode from analysis with bounded per-camera queues and source-time pacing.
 
-The E-3 capacity result remains provisional: the original sweep completed, but its pacing and queue instrumentation prevented a valid stable-capacity claim. DeepStream compatibility, the local observability stack and replay harness have measured evidence; PostgreSQL persistence and API behavior are described below; the product UI remains later work. See `docs/` (mostly private, not in Git) for planning and progress; the stable architecture ADRs and test rules are committed under `docs/architecture/` and `docs/tests_rules.md`.
+The live-capacity result remains provisional: the original sweep completed, but its pacing and queue instrumentation prevented a valid stable-capacity claim. DeepStream compatibility, the local observability stack and replay harness have measured evidence; PostgreSQL persistence and API behavior are described below; the product UI remains later work. Planning and progress under `docs/` remain mostly private. Public exceptions are the stable architecture ADRs, test rules, [API foundation](docs/api-foundation.md) and [API acceptance evidence](docs/api-acceptance.md), as recorded in [ADR-10](docs/architecture/adr/ADR-10.md). The API foundation is implemented; acceptance remains incomplete until container-to-provider routing is proven.
 
 The batched live mode uses one detection model with a bounded fair scheduler and independent camera trackers/rules. Python/Ultralytics is implemented; selecting the DeepStream adapter reports that it is unavailable. The diagnostic YAML examples explicitly use JSONL; PostgreSQL remains the production default. GPU batching uses explicit IEEE FP32 arithmetic. Fresh numerical parity and four-camera smoke pass; the 50-camera matrix misses FPS/drop targets. See [the runtime checkpoint](benchmarks/e-3/python-batched-runtime.md).
 
@@ -16,7 +16,7 @@ The reference homelab has two independent 24 GB RTX 3090 GPUs. One normally serv
 
 ```
 src/ava/          Ingest, detector/tracker, rules, events, output, runner, CLI
-configs/          Sanitized detector and E-2 rule-run YAML examples
+configs/          Sanitized detector and rule-run YAML examples
 scripts/          Asset fetch helper
 tests/            Deterministic contract checks (no GPU required)
 benchmarks/e-1/   Measured detector baseline
@@ -53,7 +53,7 @@ Outputs land under `results/<path>/`: `detections.jsonl` and `annotated.mp4`. Ru
 
 ## PostgreSQL persistence
 
-**Breaking change (B-023):** PostgreSQL is the mandatory default backend. Event-producing camera and live runs require a reachable PostgreSQL server unless the config explicitly sets `persistence.backend: jsonl`. Detection-only file runs do not connect to an event sink.
+**Breaking change:** PostgreSQL is the mandatory default backend. Event-producing camera and live runs require a reachable PostgreSQL server unless the config explicitly sets `persistence.backend: jsonl`. Detection-only file runs do not connect to an event sink.
 
 To use PostgreSQL, set `AVA_PG_DSN` in the environment (or provide `persistence.dsn` in the config) and apply the schema first:
 
