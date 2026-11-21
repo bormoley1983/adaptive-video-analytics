@@ -5,6 +5,58 @@ import pytest
 from ava.stage_metrics import CpuSampler, StageRecorder, stage_span
 
 
+@pytest.mark.parametrize("started,finished,accepted", [
+    (0., 1.5, False), (1., 1.5, True), (1.5, 4.5, True),
+    (4.5, 5., False), (4.5, 5.5, False), (5., 6., False),
+])
+def test_device_samples_require_both_endpoints_inside_window(started, finished, accepted):
+    recorder = StageRecorder(device_profile=True)
+    recorder.window = (1., 5.)
+    recorder.record_device_batch(batch_id="batch", size=1, camera_keys=("a",), ordinal=1,
+                                 stream="stream", h2d_interval_s=.1, status="available",
+                                 host_started_at=started, host_finished_at=finished)
+    samples = recorder.report()["device_profile"]["samples"]
+    assert bool(samples) is accepted
+
+
+def test_disabled_device_profile_preserves_populated_host_report():
+    recorder = StageRecorder(device_profile=False)
+    recorder.window = (1., 5.)
+    recorder.observe("decode", 2., 3., "a")
+    assert recorder.report() == {
+        "clock": "monotonic_host_wall", "window": (1., 5.),
+        "sample_policy": "deterministic per stage/camera; counts/totals describe selected complete-window spans only",
+        "calls_include_warmup_and_drain": True, "default_sample_every": 1,
+        "invalid_samples": 0, "dropped_series": 0, "device_kernel_s": None,
+        "isolated_h2d_s": None, "isolated_d2h_s": None,
+        "device_timing_status": "unavailable; predictor spans are host wall time, not kernel time",
+        "series": [{"stage": "decode", "camera_id": "a", "count": 1, "total_s": 1.,
+                    "min_s": 1., "max_s": 1., "sample_count": 1, "truncated": False,
+                    "sample_every": 1, "calls_all_phases": 1, "p50_s": 1., "p95_s": 1.}],
+    }
+
+
+def test_device_totals_cover_complete_window_when_percentile_samples_are_truncated():
+    recorder = StageRecorder(device_profile=True, max_samples=2)
+    recorder.window = (0., 10.)
+    for ordinal, value, status in [(1, 1., "available"), (2, 2., "available"),
+                                   (3, 100., "unavailable"), (4, 3., "available"),
+                                   (5, 4., "available")]:
+        recorder.record_device_batch(batch_id=str(ordinal), size=1, camera_keys=("a",), ordinal=ordinal,
+                                     stream="stream", h2d_interval_s=value, status=status,
+                                     host_started_at=1., host_finished_at=2.)
+    recorder.record_device_batch(batch_id="outside", size=1, camera_keys=("a",), ordinal=6,
+                                 stream="stream", h2d_interval_s=1000., status="available",
+                                 host_started_at=9., host_finished_at=10.)
+    profile = recorder.report()["device_profile"]
+    assert profile["batches_selected"] == 5
+    assert profile["samples_truncated"] is True
+    assert profile["h2d_device_interval_s"] == {
+        "count": 4, "total_s": 10., "sample_count": 2, "truncated": True,
+        "p50_s": 3., "p95_s": 3.,
+    }
+
+
 def test_bounded_stage_samples_keep_total_counts_and_window_boundaries():
     recorder = StageRecorder(max_samples=2, max_series=1)
     recorder.window = (1., 5.)

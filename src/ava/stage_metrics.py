@@ -12,7 +12,8 @@ from threading import enumerate as enumerate_threads
 
 
 class StageRecorder:
-    def __init__(self, *, max_samples=1024, max_series=512, sample_every=1, clock=time.monotonic):
+    def __init__(self, *, max_samples=1024, max_series=512, sample_every=1, clock=time.monotonic,
+                 device_profile=False):
         if max_samples < 1 or max_series < 1 or sample_every < 1:
             raise ValueError("sample and series limits must be positive")
         self.sample_every = sample_every
@@ -25,6 +26,108 @@ class StageRecorder:
         self.dropped_series = 0
         self._series = {}
         self._lock = Lock()
+        # Device-interval profiling is a separate opt-in with its own batch
+        # selection policy: exactly one batch per device_sample_every calls.
+        self.device_profile = bool(device_profile)
+        self.device_sample_every = sample_every
+        self.device_stream = None
+        self._device_calls = 0
+        self._device_samples = {}
+        self._device_dropped = 0
+        self._device_batch_count = 0
+        self._device_totals = {}
+
+    def select_device_batch(self):
+        """Return the selected batch's one-based ordinal, or None.
+
+        The ordinal is assigned at this call, so unselected batches perform no
+        measurement event operations and no synchronizations downstream.
+        """
+        if not self.device_profile:
+            return None
+        with self._lock:
+            self._device_calls += 1
+            if (self._device_calls - 1) % self.device_sample_every == 0:
+                return self._device_calls
+            return None
+
+    def record_device_batch(self, *, batch_id, size, camera_keys, ordinal, stream,
+                            h2d_interval_s=None, inference_interval_s=None,
+                            sync_host_wall_s=None, status="available",
+                            host_started_at=None, host_finished_at=None):
+        """Store one selected batch's paired device intervals and sync cost.
+
+        ``host_started_at`` / ``host_finished_at`` are the pair of monotonic
+        timestamps bracketing the whole prediction call for this batch; the
+        window filter uses them (the window is in run-time seconds, not batch
+        ordinals). Selection happened at selection time, before any event
+        operation or synchronization.
+        """
+        if not self.device_profile:
+            return
+        with self._lock:
+            self.device_stream = stream
+            entry = {"batch_id": batch_id, "size": size, "camera_keys": list(camera_keys),
+                     "ordinal": ordinal, "stream": stream, "status": status}
+            for field_name, value in (("h2d_interval_s", h2d_interval_s),
+                                      ("inference_interval_s", inference_interval_s),
+                                      ("sync_host_wall_s", sync_host_wall_s)):
+                entry[field_name] = None if value is None or not isfinite(value) or value < 0 else value
+            host_valid = (host_started_at is not None and host_finished_at is not None
+                          and all(isfinite(v) for v in (host_started_at, host_finished_at))
+                          and host_finished_at >= host_started_at)
+            entry["host_started_at"] = host_started_at if host_valid else None
+            entry["host_finished_at"] = host_finished_at if host_valid else None
+            if self.window is not None and (
+                not host_valid or not (self.window[0] <= host_started_at and host_finished_at < self.window[1])
+            ):
+                return
+            self._device_batch_count += 1
+            if status == "available":
+                for field_name in ("h2d_interval_s", "inference_interval_s", "sync_host_wall_s"):
+                    value = entry[field_name]
+                    if value is not None:
+                        aggregate = self._device_totals.setdefault(field_name, {"count": 0, "total_s": 0.})
+                        aggregate["count"] += 1
+                        aggregate["total_s"] += value
+            if len(self._device_samples) == self.max_samples:
+                del self._device_samples[min(self._device_samples)]
+                self._device_dropped += 1
+            self._device_samples[ordinal] = entry
+
+    @staticmethod
+    def _percentile(samples, fraction):
+        ordered = sorted(samples)
+        return ordered[int((len(ordered) - 1) * fraction)] if ordered else None
+
+    def _device_series(self, samples, field_name):
+        values = [s[field_name] for s in samples
+                  if s.get(field_name) is not None and s.get("status") == "available"]
+        aggregate = self._device_totals.get(field_name)
+        if aggregate is None:
+            return None
+        return {**aggregate, "sample_count": len(values), "truncated": aggregate["count"] > len(values),
+                "p50_s": self._percentile(values, .5), "p95_s": self._percentile(values, .95)}
+
+    def _device_section(self):
+        with self._lock:
+            samples = [self._device_samples[key] for key in sorted(self._device_samples)]
+            return {"enabled": self.device_profile,
+                    "sample_policy": "deterministic batch selection before event operations; every "
+                                     f"{self.device_sample_every}th batch",
+                    "batches_seen_all_phases": self._device_calls,
+                    "batches_selected": self._device_batch_count,
+                    "samples_truncated": self._device_dropped > 0,
+                    "stream": self.device_stream,
+                    "interval_scope": "Both h2d_device_interval_s and inference_device_interval_s "
+                                      "cover the same whole prediction call (preprocess + inference + "
+                                      "postprocessing) on the declared stream; they are not separately "
+                                      "attributable H2D or kernel-only durations",
+                    "excluded_samples": "warm-up, drain and boundary-crossing spans are not recorded",
+                    "h2d_device_interval_s": self._device_series(samples, "h2d_interval_s"),
+                    "inference_device_interval_s": self._device_series(samples, "inference_interval_s"),
+                    "sync_host_wall_s": self._device_series(samples, "sync_host_wall_s"),
+                    "samples": samples}
 
     def _select(self, stage, camera):
         key = (stage, camera)
@@ -98,15 +201,18 @@ class StageRecorder:
                                "calls_all_phases": self._calls[(stage, camera)],
                                "p50_s": samples[int((len(samples) - 1) * .5)],
                                "p95_s": samples[int((len(samples) - 1) * .95)]})
-            return {"clock": "monotonic_host_wall",
-                    "window": self.window if self.window is None or all(isfinite(v) for v in self.window) else None,
-                    "sample_policy": "deterministic per stage/camera; counts/totals describe selected complete-window spans only",
-                    "calls_include_warmup_and_drain": True,
-                    "default_sample_every": self.sample_every,
-                    "invalid_samples": self.invalid_samples, "dropped_series": self.dropped_series,
-                    "device_kernel_s": None, "isolated_h2d_s": None, "isolated_d2h_s": None,
-                    "device_timing_status": "unavailable; predictor spans are host wall time, not kernel time",
-                    "series": series}
+            report = {"clock": "monotonic_host_wall",
+                      "window": self.window if self.window is None or all(isfinite(v) for v in self.window) else None,
+                      "sample_policy": "deterministic per stage/camera; counts/totals describe selected complete-window spans only",
+                      "calls_include_warmup_and_drain": True,
+                      "default_sample_every": self.sample_every,
+                      "invalid_samples": self.invalid_samples, "dropped_series": self.dropped_series,
+                      "device_kernel_s": None, "isolated_h2d_s": None, "isolated_d2h_s": None,
+                      "device_timing_status": "unavailable; predictor spans are host wall time, not kernel time",
+                      "series": series}
+        if self.device_profile:
+            report["device_profile"] = self._device_section()
+        return report
 
 
 def stage_span(recorder, stage, camera=None):
