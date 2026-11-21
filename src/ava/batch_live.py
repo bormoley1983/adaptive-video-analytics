@@ -207,7 +207,8 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
     from .live_runner import CameraStats, LiveRunSummary
 
     recorder = (StageRecorder(max_series=32 + 12 * len(live.cameras),
-                              sample_every=live.batch.profile_sample_every)
+                              sample_every=live.batch.profile_sample_every,
+                              device_profile=live.batch.profile_device)
                 if live.batch.profile_stages else None)
     if recorder is not None:
         recorder.window = (float("inf"), float("inf"))
@@ -221,7 +222,8 @@ def run_batched_live(live, detector, output_dir, gpu, sink, *, source=iter_live_
     sink_lock = threading.Lock()
     scheduler = BatchScheduler(cameras, live.batch.max_batch_size, live.batch.max_wait_ms,
                                live.batch.shutdown_timeout_s)
-    executor = BatchExecutor(backend_factory or (lambda: UltralyticsBatchDetector(detector, gpu, recorder=recorder)),
+    executor = BatchExecutor(backend_factory or (lambda: UltralyticsBatchDetector(detector, gpu, recorder=recorder,
+                                                                                   profile_device=live.batch.profile_device)),
                              recorder=recorder)
     threads = []
     processors = []

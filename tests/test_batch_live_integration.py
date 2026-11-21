@@ -54,6 +54,29 @@ def config():
         cameras=[{"id": c, "url": f"rtsp://example/{c}", "analysis_fps": 100} for c in "ab"])
 
 
+def test_device_profile_is_wired_through_default_backend_factory(tmp_path, monkeypatch):
+    from ava import batch_live
+
+    created = []
+    class RecordingBackend(Backend):
+        def __init__(self, detector, gpu, *, recorder, profile_device):
+            super().__init__()
+            created.append((recorder, profile_device))
+
+    monkeypatch.setattr(batch_live, "UltralyticsBatchDetector", RecordingBackend)
+    live = config()
+    live.batch.profile_stages = True
+    live.batch.profile_device = True
+    run_batched_live(live, DetectorConfig(model=Path("unused.pt")), tmp_path,
+                     None, Sink(), source=source, tracker_factory=Tracker)
+    assert len(created) == 1
+    recorder, profile_device = created[0]
+    assert profile_device is True
+    assert recorder.device_profile is True
+    report = json.loads((tmp_path / "metrics.json").read_text())
+    assert report["stage_profile"]["device_profile"]["enabled"] is True
+
+
 @pytest.mark.parametrize("profile", [False, True])
 def test_common_window_and_terminal_ledgers(tmp_path, profile):
     live = config()

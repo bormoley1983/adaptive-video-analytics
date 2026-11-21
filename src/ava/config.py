@@ -382,12 +382,20 @@ class BatchConfig(BaseModel):
 
     model_config = {"extra": "forbid", "allow_inf_nan": False}
     profile_stages: bool = Field(False, strict=True)
+    # CUDA-event device intervals on selected batches; requires stage profiling.
+    profile_device: bool = Field(False, strict=True)
     profile_sample_every: int = Field(16, ge=1, strict=True)
     max_batch_size: int = Field(16, gt=0, strict=True)
     max_wait_ms: float = Field(20, gt=0)
     readiness_timeout_s: float = Field(60, gt=0)
     warmup_s: float = Field(30, ge=0)
     shutdown_timeout_s: float = Field(5, gt=0)
+
+    @model_validator(mode="after")
+    def _device_profile_requires_stage_profile(self) -> BatchConfig:
+        if self.profile_device and not self.profile_stages:
+            raise ValueError("profile_device requires profile_stages to be enabled")
+        return self
 
 
 class LiveRunConfig(BaseModel):
