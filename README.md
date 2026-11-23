@@ -29,6 +29,8 @@ docker-compose.yml  GPU-enabled one-shot run
 
 ## Prerequisites
 
+For first-time setup, follow the [installation and local deployment guide](INSTALL.md). It covers host prerequisites, the first GPU smoke, and optional services.
+
 - Docker Engine + Compose with the NVIDIA Container Toolkit.
 - One people/vehicle MP4 placed at `videos/input.mp4` (read-only mount).
 - Model assets in `models/` (run `scripts/fetch-assets.sh`, or let the image warm them on first use).
