@@ -1,4 +1,4 @@
-"""B-027 letterbox contract tests for the batched Ultralytics preprocessing boundary.
+"""Letterbox contract tests for the batched Ultralytics preprocessing boundary.
 
 These CPU-only tests verify that the installed Ultralytics preprocessor produces
 the documented square-letterbox tensor when called with the exact arguments the
@@ -22,46 +22,58 @@ DeepStream SDK path (not yet implemented in AVA).
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
+import subprocess
+import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 
 @pytest.fixture()
-def predictor():
-    """Minimal BasePredictor instance exercising the real preprocess method.
+def predictor(tmp_path):
+    """Run real preprocessing in a fresh interpreter with isolated settings."""
+    class IsolatedPredictor:
+        def preprocess(self, frames):
+            source = tmp_path / "frames.npy"
+            output = tmp_path / "output.npy"
+            config = tmp_path / "config"
+            config.mkdir(exist_ok=True)
+            np.save(source, np.stack(frames))
+            env = os.environ.copy()
+            env["YOLO_CONFIG_DIR"] = str(config)
+            worker = r"""
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+import numpy as np
+from ultralytics.engine.predictor import BasePredictor
+from ultralytics.utils import USER_CONFIG_DIR
 
-    Bypasses __init__ (which requires a model) by setting only the attributes
-    that pre_transform and preprocess read: imgsz, args.rect, args.scale_fill,
-    device, and a mock model with fp16/format/stride. No weights are loaded,
-    no inference is run. YOLO_CONFIG_DIR is isolated to a temp directory for
-    the duration of the test and restored afterwards.
-    """
-    from ultralytics.engine.predictor import BasePredictor
+assert USER_CONFIG_DIR == Path(os.environ["YOLO_CONFIG_DIR"]) / "Ultralytics"
+predictor = BasePredictor.__new__(BasePredictor)
+predictor.imgsz = 640
+predictor.args = SimpleNamespace(rect=False, scale_fill=False)
+predictor.device = "cpu"
+predictor.model = MagicMock()
+predictor.model.fp16 = False
+predictor.model.format = "pt"
+predictor.model.stride = 32
+frames = np.load(sys.argv[1])
+np.save(sys.argv[2], predictor.preprocess(list(frames)).numpy())
+"""
+            subprocess.run(
+                [sys.executable, "-c", worker, str(source), str(output)],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return np.load(output)
 
-    saved_config_dir = os.environ.get("YOLO_CONFIG_DIR")
-    tmpdir = tempfile.mkdtemp(prefix="b027-yolo-test-")
-    os.environ["YOLO_CONFIG_DIR"] = tmpdir
-    try:
-        p = BasePredictor.__new__(BasePredictor)
-        p.imgsz = 640
-        p.args = SimpleNamespace(rect=False, scale_fill=False)
-        p.device = "cpu"
-        p.model = MagicMock()
-        p.model.fp16 = False
-        p.model.format = "pt"
-        p.model.stride = 32
-        yield p
-    finally:
-        if saved_config_dir is None:
-            os.environ.pop("YOLO_CONFIG_DIR", None)
-        else:
-            os.environ["YOLO_CONFIG_DIR"] = saved_config_dir
-        shutil.rmtree(tmpdir, ignore_errors=True)
+    return IsolatedPredictor()
 
 
 def _vertical_gradient_bgr(height: int, width: int) -> np.ndarray:
@@ -83,7 +95,7 @@ def test_letterbox_output_shape(predictor):
     img = np.zeros((720, 1280, 3), dtype=np.uint8)
     out = predictor.preprocess([img])
     assert tuple(out.shape) == (1, 3, 640, 640), f"expected (1,3,640,640), got {tuple(out.shape)}"
-    assert str(out.dtype) == "torch.float32", f"expected float32, got {out.dtype}"
+    assert out.dtype == np.float32, f"expected float32, got {out.dtype}"
 
 
 def test_letterbox_content_geometry_spatial_oracle(predictor):
