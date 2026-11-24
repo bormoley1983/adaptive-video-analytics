@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from fractions import Fraction
+from math import isfinite
 
 from .config import (
     ClassFilter,
@@ -86,15 +88,34 @@ def segments_cross_line(
            ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0))
 
 
+def _point_on_segment(
+    point: tuple[float, float], start: tuple[float, float], end: tuple[float, float],
+) -> bool:
+    x, y = point
+    x1, y1 = start
+    x2, y2 = end
+    if not all(isfinite(value) for value in (x, y, x1, y1, x2, y2)):
+        return False
+    if not (min(x1, x2) <= x <= max(x1, x2) and min(y1, y2) <= y <= max(y1, y2)):
+        return False
+    # Binary floats are rational; exact arithmetic avoids both rounding a
+    # nonzero cross product to zero and adding an arbitrary boundary band.
+    px, py, ax, ay, bx, by = map(Fraction, (x, y, x1, y1, x2, y2))
+    return (px - ax) * (by - ay) == (py - ay) * (bx - ax)
+
+
 def point_in_polygon(point: tuple[float, float], points: list[tuple[float, float]]) -> bool:
-    """Ray-casting point-in-polygon test (normalized coordinates)."""
+    """Ray-casting point-in-polygon test, including exact edges and vertices."""
     inside = False
     n = len(points)
     j = n - 1
     x, y = point
+    finite_geometry = all(isfinite(value) for vertex in [point, *points] for value in vertex)
     for i in range(n):
         xi, yi = points[i]
         xj, yj = points[j]
+        if finite_geometry and _point_on_segment(point, points[j], points[i]):
+            return True
         if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
             inside = not inside
         j = i
