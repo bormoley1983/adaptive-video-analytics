@@ -5,9 +5,13 @@ the documented square-letterbox tensor when called with the exact arguments the
 AVA batched backend uses (imgsz=640, rect=False):
 
   * 1280x720 input -> 640x360 content region + 140 gray-114 rows top/bottom
-  * output shape (1, 3, 640, 640), float32, values in [0.0, 1.0]
+  * output shape (N, 3, 640, 640), float32, values in [0.0, 1.0]
   * RGB channel order (BGR input is flipped)
   * /255 normalization
+
+The tests exercise the actual ``BasePredictor.preprocess`` method (not a
+reimplementation), using a spatially varying oracle to detect stretching and
+a same-shape batch to verify multi-frame layout.
 
 Scope limitation: these tests exercise the batched predictor boundary only.
 They do NOT claim parity for single-frame conventional or prompted paths
@@ -18,118 +22,183 @@ DeepStream SDK path (not yet implemented in AVA).
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
-
-# Isolate Ultralytics settings so tests never read or write the user's config.
-os.environ["YOLO_CONFIG_DIR"] = tempfile.mkdtemp(prefix="b027-yolo-test-")
+import pytest
 
 
-def _letterbox_tensor(bgr_image: np.ndarray) -> np.ndarray:
-    """Replicate BasePredictor.pre_transform + preprocess for rect=False, imgsz=640.
+@pytest.fixture()
+def predictor():
+    """Minimal BasePredictor instance exercising the real preprocess method.
 
-    Mirrors the exact call chain in ultralytics.engine.predictor.BasePredictor:
-      1. LetterBox(640, auto=False, scale_fill=False, stride=32)(image=bgr)
-      2. torch.from_numpy -> unsqueeze -> permute BHWC->BCHW -> flip BGR->RGB
-      3. float().div_(255)
-
-    Returns a numpy array (1, 3, 640, 640) float32 to avoid requiring torch
-    in the test environment (the existing tests stub torch via conftest).
+    Bypasses __init__ (which requires a model) by setting only the attributes
+    that pre_transform and preprocess read: imgsz, args.rect, args.scale_fill,
+    device, and a mock model with fp16/format/stride. No weights are loaded,
+    no inference is run. YOLO_CONFIG_DIR is isolated to a temp directory for
+    the duration of the test and restored afterwards.
     """
-    from ultralytics.data.augment import LetterBox
+    from ultralytics.engine.predictor import BasePredictor
 
-    lb = LetterBox(640, auto=False, scale_fill=False, stride=32)
-    padded = lb(image=bgr_image)  # (640, 640, 3) uint8, BGR order preserved
+    saved_config_dir = os.environ.get("YOLO_CONFIG_DIR")
+    tmpdir = tempfile.mkdtemp(prefix="b027-yolo-test-")
+    os.environ["YOLO_CONFIG_DIR"] = tmpdir
+    try:
+        p = BasePredictor.__new__(BasePredictor)
+        p.imgsz = 640
+        p.args = SimpleNamespace(rect=False, scale_fill=False)
+        p.device = "cpu"
+        p.model = MagicMock()
+        p.model.fp16 = False
+        p.model.format = "pt"
+        p.model.stride = 32
+        yield p
+    finally:
+        if saved_config_dir is None:
+            os.environ.pop("YOLO_CONFIG_DIR", None)
+        else:
+            os.environ["YOLO_CONFIG_DIR"] = saved_config_dir
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
-    # Replicate the torch ops with numpy: permute BHWC->BCHW, flip channel axis.
-    bchw = np.transpose(padded, (2, 0, 1))  # (3, 640, 640) BGR
-    rgb = bchw[::-1]                        # (3, 640, 640) RGB
-    tensor = rgb.astype(np.float32) / 255.0  # normalize
-    return tensor[np.newaxis, ...]          # (1, 3, 640, 640)
+
+def _vertical_gradient_bgr(height: int, width: int) -> np.ndarray:
+    """BGR image with a vertical gradient in the R channel (row 0=0, last row~255).
+
+    B and G channels are constant. After letterbox to 640x640 with content
+    rows 140..500 (360 rows scaled from `height`), the R channel at content
+    row i should be approximately (i * height / 360) / 255, NOT (i / 640) / 255.
+    This distinguishes correct aspect-preserving scaling from stretching.
+    """
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    for r in range(height):
+        img[r, :, 2] = int(r * 255 / (height - 1)) if height > 1 else 0
+    return img
 
 
-def test_letterbox_output_shape():
+def test_letterbox_output_shape(predictor):
     """1280x720 BGR input produces (1, 3, 640, 640) float32 tensor."""
     img = np.zeros((720, 1280, 3), dtype=np.uint8)
-    out = _letterbox_tensor(img)
-    assert out.shape == (1, 3, 640, 640), f"expected (1,3,640,640), got {out.shape}"
-    assert out.dtype == np.float32
+    out = predictor.preprocess([img])
+    assert tuple(out.shape) == (1, 3, 640, 640), f"expected (1,3,640,640), got {tuple(out.shape)}"
+    assert str(out.dtype) == "torch.float32", f"expected float32, got {out.dtype}"
 
 
-def test_letterbox_content_geometry():
-    """Content occupies rows 140..500; padding is rows 0..139 and 500..639."""
-    img = np.full((720, 1280, 3), 200, dtype=np.uint8)
-    out = _letterbox_tensor(img)
+def test_letterbox_content_geometry_spatial_oracle(predictor):
+    """Spatially varying R channel verifies aspect-preserving scaling (no stretch).
 
-    # Content region: rows 140-499 (inclusive) should carry the input value.
-    content = out[0, :, 140:500, :]
-    assert np.allclose(content, 200.0 / 255.0, atol=1e-6), (
-        f"content region should be ~{200/255:.4f}, got range "
-        f"[{content.min():.4f}, {content.max():.4f}]"
+    A vertical gradient in the source R channel produces a known linear ramp
+    in the content region. The content occupies rows 140..500 (360 rows) of
+    the 640x640 output, scaled from the full 720-row source. If the
+    preprocessor stretched 720 rows into 640 (instead of scaling to 360 and
+    padding), the midpoint value would be ~0.28 instead of ~0.50. This test
+    detects that defect.
+    """
+    img = _vertical_gradient_bgr(720, 1280)
+    out = predictor.preprocess([img])
+
+    # R channel (output channel 0 after BGR->RGB flip), center column.
+    r_ch = out[0, 0, :, 320]
+
+    # Content region: rows 140..499 (360 rows). The content is the full 720-row
+    # source scaled to 360 rows, so content row i maps to source row ~i*2.
+    # Content row 0 -> source row 0 -> R=0 -> 0.0
+    assert abs(r_ch[140].item()) < 0.01, f"content start should be ~0.0, got {r_ch[140].item()}"
+
+    # Content row 180 (middle of 360-row content) -> source row ~360 -> R~127 -> ~0.498
+    # The gradient spans the full 720-row source compressed into 360 content rows,
+    # so the midpoint is ~0.50, not 0.70. A stretched-to-640 result would have
+    # no uniform padding boundary at row 140 (checked below).
+    mid_val = r_ch[140 + 180].item()
+    assert abs(mid_val - 0.50) < 0.02, (
+        f"content midpoint should be ~0.50 (720-row gradient in 360 content rows), "
+        f"got {mid_val:.4f}"
     )
 
-    # Top padding: rows 0-139 should be gray 114 on all channels.
+    # Content row 359 (last content row) -> source row ~718 -> R~254 -> ~0.996
+    end_val = r_ch[140 + 359].item()
+    assert abs(end_val - 1.0) < 0.01, f"content end should be ~1.0, got {end_val:.4f}"
+
+    # Padding regions: rows 0..139 and 500..639 are gray-114 on all channels.
+    # The existence of a sharp boundary at row 140 (content starts) and row 500
+    # (content ends) is itself the stretch detector: a stretched image would
+    # have no uniform padding rows.
     top_pad = out[0, :, :140, :]
-    assert np.allclose(top_pad, 114.0 / 255.0, atol=1e-6), (
-        f"top padding should be ~{114/255:.4f}, got range "
-        f"[{top_pad.min():.4f}, {top_pad.max():.4f}]"
-    )
-
-    # Bottom padding: rows 500-639 should be gray 114 on all channels.
     bot_pad = out[0, :, 500:, :]
-    assert np.allclose(bot_pad, 114.0 / 255.0, atol=1e-6), (
-        f"bottom padding should be ~{114/255:.4f}, got range "
-        f"[{bot_pad.min():.4f}, {bot_pad.max():.4f}]"
+    expected_pad = 114.0 / 255.0
+    assert abs(top_pad.mean().item() - expected_pad) < 1e-6, (
+        f"top padding should be ~{expected_pad:.4f}, got {top_pad.mean().item():.4f}"
     )
+    assert abs(bot_pad.mean().item() - expected_pad) < 1e-6, (
+        f"bottom padding should be ~{expected_pad:.4f}, got {bot_pad.mean().item():.4f}"
+    )
+    # Padding must be uniform (zero variance) — a stretched image would have
+    # varying values in the "padding" region.
+    assert top_pad.std().item() < 1e-6, f"top padding should be uniform, std={top_pad.std().item():.6f}"
+    assert bot_pad.std().item() < 1e-6, f"bottom padding should be uniform, std={bot_pad.std().item():.6f}"
 
 
-def test_letterbox_rgb_order():
+def test_letterbox_rgb_order(predictor):
     """BGR input channels are flipped to RGB in the output tensor."""
-    # Distinct per-channel values: B=100, G=150, R=200
     img = np.zeros((720, 1280, 3), dtype=np.uint8)
     img[:, :, 0] = 100  # Blue
     img[:, :, 1] = 150  # Green
     img[:, :, 2] = 200  # Red
 
-    out = _letterbox_tensor(img)
+    out = predictor.preprocess([img])
 
     # Output channel 0 = R (input channel 2), channel 1 = G, channel 2 = B.
     r_content = out[0, 0, 140:500, :]
     g_content = out[0, 1, 140:500, :]
     b_content = out[0, 2, 140:500, :]
 
-    assert np.allclose(r_content, 200.0 / 255.0, atol=1e-6), (
-        f"R channel should be ~{200/255:.4f}, got {r_content.mean():.4f}"
+    assert abs(r_content.mean().item() - 200.0 / 255.0) < 1e-6, (
+        f"R channel should be ~{200/255:.4f}, got {r_content.mean().item():.4f}"
     )
-    assert np.allclose(g_content, 150.0 / 255.0, atol=1e-6), (
-        f"G channel should be ~{150/255:.4f}, got {g_content.mean():.4f}"
+    assert abs(g_content.mean().item() - 150.0 / 255.0) < 1e-6, (
+        f"G channel should be ~{150/255:.4f}, got {g_content.mean().item():.4f}"
     )
-    assert np.allclose(b_content, 100.0 / 255.0, atol=1e-6), (
-        f"B channel should be ~{100/255:.4f}, got {b_content.mean():.4f}"
+    assert abs(b_content.mean().item() - 100.0 / 255.0) < 1e-6, (
+        f"B channel should be ~{100/255:.4f}, got {b_content.mean().item():.4f}"
     )
 
 
-def test_letterbox_normalization_range():
+def test_letterbox_normalization_range(predictor):
     """All output values are in [0.0, 1.0] after /255 normalization."""
-    img = np.random.randint(0, 256, size=(720, 1280, 3), dtype=np.uint8)
-    out = _letterbox_tensor(img)
-    assert out.min() >= 0.0, f"min value {out.min():.4f} below 0.0"
-    assert out.max() <= 1.0, f"max value {out.max():.4f} above 1.0"
+    rng = np.random.default_rng(42)
+    img = rng.integers(0, 256, size=(720, 1280, 3), dtype=np.uint8)
+    out = predictor.preprocess([img])
+    assert out.min().item() >= 0.0, f"min value {out.min().item():.4f} below 0.0"
+    assert out.max().item() <= 1.0, f"max value {out.max().item():.4f} above 1.0"
 
 
-def test_letterbox_padding_exact_gray_114():
+def test_letterbox_padding_exact_gray_114(predictor):
     """Padding pixels are exactly gray 114/255 (not black, not white)."""
     img = np.zeros((720, 1280, 3), dtype=np.uint8)
-    out = _letterbox_tensor(img)
+    out = predictor.preprocess([img])
 
-    # Corner pixel: top-left should be (114/255, 114/255, 114/255).
     corner = out[0, :, 0, 0]
     expected = 114.0 / 255.0
     for ch in range(3):
-        assert abs(corner[ch] - expected) < 1e-6, (
-            f"corner channel {ch} = {corner[ch]:.6f}, expected {expected:.6f}"
+        assert abs(corner[ch].item() - expected) < 1e-6, (
+            f"corner channel {ch} = {corner[ch].item():.6f}, expected {expected:.6f}"
         )
+
+
+def test_letterbox_same_shape_batch(predictor):
+    """Two identical 720x1280 frames produce (2, 3, 640, 640) with matching content."""
+    img = np.full((720, 1280, 3), 200, dtype=np.uint8)
+    out = predictor.preprocess([img, img])
+
+    assert tuple(out.shape) == (2, 3, 640, 640), f"expected (2,3,640,640), got {tuple(out.shape)}"
+    # Both frames should have identical content.
+    frame_0_content = out[0, 0, 140:500, :]
+    frame_1_content = out[1, 0, 140:500, :]
+    assert abs(frame_0_content.mean().item() - frame_1_content.mean().item()) < 1e-6
+    # Content value should be the input value normalized.
+    assert abs(frame_0_content.mean().item() - 200.0 / 255.0) < 1e-6
 
 
 def test_batch_backend_passes_rect_false_and_imgsz_640():
@@ -140,7 +209,6 @@ def test_batch_backend_passes_rect_false_and_imgsz_640():
     letterbox contract to the exact arguments the production path uses.
     """
     from pathlib import Path
-    from types import SimpleNamespace
 
     from ava.batch import BatchItem, BatchKey, DetectionBatch
     from ava.batch_backend import UltralyticsBatchDetector
