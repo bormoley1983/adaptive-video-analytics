@@ -6,6 +6,8 @@ discontinuities, with explicit expected counts and times (ADR-4 semantics).
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from ava.config import (
@@ -85,6 +87,43 @@ def test_point_in_polygon() -> None:
     poly = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)]
     assert point_in_polygon((0.5, 0.5), poly)
     assert not point_in_polygon((0.05, 0.5), poly)
+
+
+@pytest.mark.parametrize("point", [
+    (0.0, 0.5), (1.0, 0.5), (0.5, 0.0), (0.5, 1.0),
+    (0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0),
+])
+def test_polygon_boundary_included_for_both_windings(point) -> None:
+    square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert point_in_polygon(point, square)
+    assert point_in_polygon(point, list(reversed(square)))
+
+
+def test_polygon_sloped_boundary_and_no_tolerance() -> None:
+    triangle = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]
+    assert point_in_polygon((0.5, 0.5), triangle)
+    assert not point_in_polygon((0.5, math.nextafter(0.5, 1.0)), triangle)
+    assert not point_in_polygon((-0.5, -0.5), triangle)
+    assert not point_in_polygon((0.5, math.nextafter(0.0, -1.0)), triangle)
+
+
+def test_polygon_degenerate_edge_only_includes_its_vertex() -> None:
+    poly = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert point_in_polygon((1.0, 0.0), poly)
+    assert not point_in_polygon((1.5, 0.0), poly)
+
+
+@pytest.mark.parametrize("point", [(math.nan, 0.5), (math.inf, 0.5), (0.5, math.nan), (0.5, -math.inf)])
+def test_nonfinite_anchor_retains_ray_cast_behavior(point) -> None:
+    square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert not point_in_polygon(point, square)
+
+
+def test_nonfinite_inputs_keep_original_ray_cast_behavior() -> None:
+    square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert not point_in_polygon((-math.inf, 0.5), square)
+    polygon_with_nan = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (math.nan, 1.0)]
+    assert not point_in_polygon((1.0, 0.5), polygon_with_nan)
 
 
 # --- line crossing -----------------------------------------------------------
@@ -200,6 +239,13 @@ def test_entry_outside_to_inside() -> None:
     assert events[0].source_time_s == pytest.approx(0.1)
 
 
+def test_entry_from_outside_to_polygon_boundary() -> None:
+    frames = [frame(0, 0.0, [det(1, 0.2, 0.9)]), frame(1, 0.1, [det(1, 0.6, 0.9)])]
+    events = run_engine([_entry_rule()], frames)
+    assert len(events) == 1
+    assert events[0].source_time_s == pytest.approx(0.1)
+
+
 def test_first_seen_inside_is_occupancy_not_entry() -> None:
     # Track appears already inside the zone: no entry event (ADR-4).
     frames = [
@@ -257,6 +303,13 @@ def test_dwell_fires_after_continuous_presence() -> None:
     assert events[0].rule_type == "dwell"
     assert events[0].source_time_s == pytest.approx(1.0)
     assert events[0].payload["dwell_seconds"] == pytest.approx(1.0)
+
+
+def test_dwell_qualifies_on_polygon_boundary() -> None:
+    frames = [frame(0, 0.0, [det(1, 0.6, 0.9)]), frame(1, 1.0, [det(1, 0.6, 0.9)])]
+    events = run_engine([_dwell_rule()], frames)
+    assert len(events) == 1
+    assert events[0].source_time_s == pytest.approx(1.0)
 
 
 def test_dwell_resets_on_exit() -> None:
